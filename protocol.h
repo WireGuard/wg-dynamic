@@ -9,7 +9,7 @@
 #include <stdint.h>
 
 /* possible types of requests the client can make */
-enum wg_client_request = { WG_MINIMAL = 0 };
+enum wg_client_request = { WG_REQUEST_SIMPLE = 0 };
 
 /* client request message */
 struct wg_client_message {
@@ -18,8 +18,8 @@ struct wg_client_message {
 
 /* server request message */
 struct wg_server_message {
-	uint32_t leased_ip; /* dynamic IP leased to client */
-	uint32_t leased_ip_cidr; /* CIDR of dynamic IP leased to client */
+	uint32_t leased_ipv4; /* dynamic IPv4 leased to client */
+	uint32_t leased_ipv4_cidr; /* CIDR of dynamic IPv4 leased to client */
 	uint32_t lease_timeout; /* activity timeout for the IP lease in seconds */
 	uint32_t route; /* route for client */
 	uint32_t route_cidr; /* CIDR of route for client */
