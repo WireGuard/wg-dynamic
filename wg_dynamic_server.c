@@ -3,15 +3,12 @@
  * Copyright (C) 2018 Wireguard LLC
  */
 
+#include "server.h"o
+
 #include <stdlib.h>
 #include <stdio.h>
 
 const char *PROG_NAME;
-
-/* TODO: break this function out into another file when it gets big */
-static void setup_server(char *interface)
-{
-}
 
 static void show_usage()
 {
@@ -27,7 +24,10 @@ int main(int argc, char *argv[])
 		return EXIT_FAILURE;
 	}
 
-	setup_server(argv[1]);
+    if (setup_server(argv[1]) < 0) {
+        perror("error setting up server");
+        return EXIT_FAILURE;
+    }
 
 	return EXIT_SUCCESS;
 }

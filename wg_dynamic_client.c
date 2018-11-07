@@ -25,7 +25,7 @@ int main(int argc, char *argv[])
 	}
 
 	if (connect_to_server(argv[1]) < 0) {
-		perror("error connecting to wg-dynamic server: ");
+		perror("error connecting to server");
 		return EXIT_FAILURE;
 	}
 

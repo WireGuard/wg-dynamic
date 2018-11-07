@@ -18,7 +18,8 @@ wg-dynamic-server: ${SERVER_OBJS}
 	${CC} ${LDFLAGS} ${SERVER_OBJS} -o $@
 wg_dynamic_client.o: wg_dynamic_client.c client.h
 client.o: client.c client.h
-wg_dynamic_server.o: wg_dynamic_server.c
+wg_dynamic_server.o: wg_dynamic_server.c server.h
+server.o: server.c server.h
 
 clean:
 	rm -f ${PROGS} *.o *~
