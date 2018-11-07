@@ -1,11 +1,13 @@
 CC ?= gcc
+LIBRARY_INCLUDES = 
+LIBRARY_LDFLAGS = -lcapnp_c
 CFLAGS_DEBUG = -g -Wall -Wextra -std=gnu11 -fsanitize=address -fsanitize=leak\
 	-fsanitize=undefined
 LDFLAGS_DEBUG = -fsanitize=address -fsanitize=leak -fsanitize=undefined
 CFLAGS_OPT = -std=gnu11 -O2 -pipe -DNDEBUG
 LDFLAGS_OPT =
-CFLAGS ?= ${CFLAGS_DEBUG}
-LDFLAGS ?= ${LDFLAGS_DEBUG}
+CFLAGS ?= ${CFLAGS_DEBUG} ${LIBRARY_INCLUDES}
+LDFLAGS ?= ${LDFLAGS_DEBUG} ${LIBRARY_LDFLAGS}
 .PHONY: clean style
 PROGS = wg-dynamic-client wg-dynamic-server
 CLIENT_OBJS = wg-dynamic-client.o protocol.capnp.o
