@@ -8,16 +8,17 @@ CFLAGS ?= ${CFLAGS_DEBUG}
 LDFLAGS ?= ${LDFLAGS_DEBUG}
 .PHONY: clean style
 PROGS = wg-dynamic-client wg-dynamic-server
-CLIENT_OBJS = wg-dynamic-client.o
-SERVER_OBJS = wg-dynamic-server.o
+CLIENT_OBJS = wg_dynamic_client.o client.o
+SERVER_OBJS = wg_dynamic_server.o
 all: ${PROGS}
 
-client: ${CLIENT_OBJS}
+wg-dynamic-client: ${CLIENT_OBJS}
 	${CC} ${LDFLAGS} ${CLIENT_OBJS} -o $@
-server: ${SERVER_OBJS}
+wg-dynamic-server: ${SERVER_OBJS}
 	${CC} ${LDFLAGS} ${SERVER_OBJS} -o $@
-wg-dynamic-client.o: wg-dynamic-client.c
-wg-dynamic-server.o: wg-dynamic-server.c
+wg_dynamic_client.o: wg_dynamic_client.c client.h
+client.o: client.c client.h
+wg_dynamic_server.o: wg_dynamic_server.c
 
 clean:
 	rm -f ${PROGS} *.o *~
