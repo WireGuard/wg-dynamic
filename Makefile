@@ -10,16 +10,19 @@ CFLAGS ?= ${CFLAGS_DEBUG} ${LIBRARY_INCLUDES}
 LDFLAGS ?= ${LDFLAGS_DEBUG} ${LIBRARY_LDFLAGS}
 .PHONY: clean style
 PROGS = wg-dynamic-client wg-dynamic-server
-CLIENT_OBJS = wg-dynamic-client.o protocol.capnp.o
-SERVER_OBJS = wg-dynamic-server.o protocol.capnp.o
+CLIENT_OBJS = wg_dynamic_client.o client.o protocol.capnp.o
+SERVER_OBJS = wg_dynamic_server.o server.o protocol.capnp.o
 all: ${PROGS}
 
 wg-dynamic-client: ${CLIENT_OBJS}
 	${CC} ${LDFLAGS} ${CLIENT_OBJS} -o $@
 wg-dynamic-server: ${SERVER_OBJS}
 	${CC} ${LDFLAGS} ${SERVER_OBJS} -o $@
-wg-dynamic-client.o: wg-dynamic-client.c
-wg-dynamic-server.o: wg-dynamic-server.c
+
+wg_dynamic_client.o: wg_dynamic_client.c client.h
+client.o: client.c client.h
+wg_dynamic_server.o: wg_dynamic_server.c server.h
+server.o: server.c server.h
 protocol.capnp.o: protocol.capnp.c
 
 # capnproto

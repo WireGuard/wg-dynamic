@@ -1,0 +1,10 @@
+Here are some of the TODO in loosely step-by-step order:
+* Design a Cap'n Proto protocol (no compression, no packing allowed!)
+* Write server side to create TCP connection
+* Write client side to connect to TCP connection
+* Get client side to properly configure the dynamic IP from the server (using dummy data sent by server)
+  - Will need to use libmnl to configure the device
+  - Will need to use mini wireguard library (https://git.zx2c4.com/WireGuard/tree/contrib/examples/embeddable-wg-library) to configure wireguard
+* Get server side to give real dynamic IP info to client
+* Get client side to handle events (up/down/etc)
+  - libevent
