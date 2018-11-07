@@ -22,4 +22,6 @@ wg-dynamic-server.o: wg-dynamic-server.c
 clean:
 	rm -f ${PROGS} *.o *~
 style:
-	clang-format -i --style=file *.c *.h
+	find . -type f \( -name "*.c" -or -name "*.h" \) -and \
+	-not \( -name "*.capnp.c" -or -name "*.capnp.h" \) | \
+	xargs clang-format -i --style=file
