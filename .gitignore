@@ -53,3 +53,7 @@ dkms.conf
 
 # Editor temporaries
 *~
+
+# Binaries
+wg-dynamic-client
+wg-dynamic-server
