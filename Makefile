@@ -9,7 +9,7 @@ LDFLAGS ?= ${LDFLAGS_DEBUG}
 .PHONY: clean style
 PROGS = wg-dynamic-client wg-dynamic-server
 CLIENT_OBJS = wg_dynamic_client.o client.o
-SERVER_OBJS = wg_dynamic_server.o
+SERVER_OBJS = wg_dynamic_server.o server.o
 all: ${PROGS}
 
 wg-dynamic-client: ${CLIENT_OBJS}

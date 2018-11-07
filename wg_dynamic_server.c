@@ -3,7 +3,7 @@
  * Copyright (C) 2018 Wireguard LLC
  */
 
-#include "server.h"o
+#include "server.h"
 
 #include <stdlib.h>
 #include <stdio.h>
