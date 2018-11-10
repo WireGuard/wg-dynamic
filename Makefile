@@ -1,6 +1,6 @@
 CC ?= gcc
 LIBRARY_INCLUDES = 
-LIBRARY_LDFLAGS = -lcapnp_c
+LIBRARY_LDFLAGS = -D_REENTRANT -lpthread -lcapnp_c
 CFLAGS_DEBUG = -g -Wall -Wextra -std=gnu11 -fsanitize=address -fsanitize=leak\
 	-fsanitize=undefined
 LDFLAGS_DEBUG = -fsanitize=address -fsanitize=leak -fsanitize=undefined
