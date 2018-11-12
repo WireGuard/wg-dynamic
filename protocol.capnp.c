@@ -40,33 +40,95 @@ void set_WgClientMsg(const struct WgClientMsg *s, WgClientMsg_list l, int i) {
 	write_WgClientMsg(s, p);
 }
 
+WgIpv4Addr_ptr new_WgIpv4Addr(struct capn_segment *s) {
+	WgIpv4Addr_ptr p;
+	p.p = capn_new_struct(s, 8, 0);
+	return p;
+}
+WgIpv4Addr_list new_WgIpv4Addr_list(struct capn_segment *s, int len) {
+	WgIpv4Addr_list p;
+	p.p = capn_new_list(s, len, 8, 0);
+	return p;
+}
+void read_WgIpv4Addr(struct WgIpv4Addr *s capnp_unused, WgIpv4Addr_ptr p) {
+	capn_resolve(&p.p);
+	capnp_use(s);
+	s->addr = capn_read32(p.p, 0);
+	s->cidr = capn_read8(p.p, 4);
+}
+void write_WgIpv4Addr(const struct WgIpv4Addr *s capnp_unused, WgIpv4Addr_ptr p) {
+	capn_resolve(&p.p);
+	capnp_use(s);
+	capn_write32(p.p, 0, s->addr);
+	capn_write8(p.p, 4, s->cidr);
+}
+void get_WgIpv4Addr(struct WgIpv4Addr *s, WgIpv4Addr_list l, int i) {
+	WgIpv4Addr_ptr p;
+	p.p = capn_getp(l.p, i, 0);
+	read_WgIpv4Addr(s, p);
+}
+void set_WgIpv4Addr(const struct WgIpv4Addr *s, WgIpv4Addr_list l, int i) {
+	WgIpv4Addr_ptr p;
+	p.p = capn_getp(l.p, i, 0);
+	write_WgIpv4Addr(s, p);
+}
+
+WgIpv6Addr_ptr new_WgIpv6Addr(struct capn_segment *s) {
+	WgIpv6Addr_ptr p;
+	p.p = capn_new_struct(s, 8, 1);
+	return p;
+}
+WgIpv6Addr_list new_WgIpv6Addr_list(struct capn_segment *s, int len) {
+	WgIpv6Addr_list p;
+	p.p = capn_new_list(s, len, 8, 1);
+	return p;
+}
+void read_WgIpv6Addr(struct WgIpv6Addr *s capnp_unused, WgIpv6Addr_ptr p) {
+	capn_resolve(&p.p);
+	capnp_use(s);
+	s->addr = capn_get_data(p.p, 0);
+	s->cidr = capn_read8(p.p, 0);
+}
+void write_WgIpv6Addr(const struct WgIpv6Addr *s capnp_unused, WgIpv6Addr_ptr p) {
+	capn_resolve(&p.p);
+	capnp_use(s);
+	capn_setp(p.p, 0, s->addr.p);
+	capn_write8(p.p, 0, s->cidr);
+}
+void get_WgIpv6Addr(struct WgIpv6Addr *s, WgIpv6Addr_list l, int i) {
+	WgIpv6Addr_ptr p;
+	p.p = capn_getp(l.p, i, 0);
+	read_WgIpv6Addr(s, p);
+}
+void set_WgIpv6Addr(const struct WgIpv6Addr *s, WgIpv6Addr_list l, int i) {
+	WgIpv6Addr_ptr p;
+	p.p = capn_getp(l.p, i, 0);
+	write_WgIpv6Addr(s, p);
+}
+
 WgServerSimpleMsg_ptr new_WgServerSimpleMsg(struct capn_segment *s) {
 	WgServerSimpleMsg_ptr p;
-	p.p = capn_new_struct(s, 24, 0);
+	p.p = capn_new_struct(s, 8, 2);
 	return p;
 }
 WgServerSimpleMsg_list new_WgServerSimpleMsg_list(struct capn_segment *s, int len) {
 	WgServerSimpleMsg_list p;
-	p.p = capn_new_list(s, len, 24, 0);
+	p.p = capn_new_list(s, len, 8, 2);
 	return p;
 }
 void read_WgServerSimpleMsg(struct WgServerSimpleMsg *s capnp_unused, WgServerSimpleMsg_ptr p) {
 	capn_resolve(&p.p);
 	capnp_use(s);
-	s->leasedIpv4 = capn_read32(p.p, 0);
-	s->leasedIpv4Cidr = capn_read32(p.p, 4);
-	s->leaseTimeout = capn_read32(p.p, 8);
-	s->route = capn_read32(p.p, 12);
-	s->routeCidr = capn_read32(p.p, 16);
+	s->leasedIpv4.p = capn_getp(p.p, 0, 0);
+	s->leaseTimeout = capn_read32(p.p, 0);
+	s->ipv4Routes.p = capn_getp(p.p, 1, 0);
 }
 void write_WgServerSimpleMsg(const struct WgServerSimpleMsg *s capnp_unused, WgServerSimpleMsg_ptr p) {
 	capn_resolve(&p.p);
 	capnp_use(s);
-	capn_write32(p.p, 0, s->leasedIpv4);
-	capn_write32(p.p, 4, s->leasedIpv4Cidr);
-	capn_write32(p.p, 8, s->leaseTimeout);
-	capn_write32(p.p, 12, s->route);
-	capn_write32(p.p, 16, s->routeCidr);
+	capn_setp(p.p, 0, s->leasedIpv4.p);
+	capn_write32(p.p, 0, s->leaseTimeout);
+	capn_setp(p.p, 1, s->ipv4Routes.p);
 }
 void get_WgServerSimpleMsg(struct WgServerSimpleMsg *s, WgServerSimpleMsg_list l, int i) {
 	WgServerSimpleMsg_ptr p;
