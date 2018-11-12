@@ -24,10 +24,10 @@ int main(int argc, char *argv[])
 		return EXIT_FAILURE;
 	}
 
-    if (setup_server(argv[1]) < 0) {
-        perror("error setting up server");
-        return EXIT_FAILURE;
-    }
+	if (setup_server(argv[1]) < 0) {
+		perror("error setting up server");
+		return EXIT_FAILURE;
+	}
 
 	return EXIT_SUCCESS;
 }
