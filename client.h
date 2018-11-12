@@ -8,8 +8,8 @@
 
 #include <stdbool.h>
 
-bool is_server_in_allowed_ips(const char interface[]);
+bool is_server_in_allowed_ips(const char iface[]);
 int connect_to_server();
-void close_connection(int sock);
+int close_connection(int sock);
 
 #endif
