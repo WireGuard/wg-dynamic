@@ -20,9 +20,10 @@ wg-dynamic-server: ${SERVER_OBJS}
 	${CC} ${LDFLAGS} ${SERVER_OBJS} -o $@
 
 wg_dynamic_client.o: wg_dynamic_client.c client.h
-client.o: client.c client.h
+client.o: client.c client.h wireguard.h
 wg_dynamic_server.o: wg_dynamic_server.c server.h
-server.o: server.c server.h
+server.o: server.c server.h wireguard.h
+wireguard.o: wireguard.c wireguard.h
 protocol.capnp.o: protocol.capnp.c
 
 # capnproto
