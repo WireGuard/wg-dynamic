@@ -11,13 +11,18 @@
 #include <sys/wait.h>
 #include <sys/socket.h>
 #include <arpa/inet.h>
+#include "wireguard.h"
 #include "protocol.h"
 #include "server.h"
 
 bool is_wg_up_on_iface(const char iface[])
 {
-	/* TODO */
-	return true;
+	wg_device *device;
+	if (wg_get_device(&device, iface) < 0) {
+		return false;
+	} else {
+		return true;
+	}
 }
 
 int setup_server()

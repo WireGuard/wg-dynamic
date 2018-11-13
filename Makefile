@@ -10,8 +10,8 @@ CFLAGS ?= ${CFLAGS_DEBUG} ${LIBRARY_INCLUDES}
 LDFLAGS ?= ${LDFLAGS_DEBUG} ${LIBRARY_LDFLAGS}
 .PHONY: clean style
 PROGS = wg-dynamic-client wg-dynamic-server
-CLIENT_OBJS = wg_dynamic_client.o client.o protocol.capnp.o
-SERVER_OBJS = wg_dynamic_server.o server.o protocol.capnp.o
+CLIENT_OBJS = wg_dynamic_client.o client.o protocol.capnp.o wireguard.o
+SERVER_OBJS = wg_dynamic_server.o server.o protocol.capnp.o wireguard.o
 all: ${PROGS}
 
 wg-dynamic-client: ${CLIENT_OBJS}
@@ -36,6 +36,6 @@ protocol.capnp.c: protocol.capnp
 clean:
 	rm -f ${PROGS} *.o *~
 style:
-	find . -type f \( -name "*.c" -or -name "*.h" \) -and \
-	-not \( -name "*.capnp.c" -or -name "*.capnp.h" \) | \
-	xargs clang-format -i --style=file
+	find . -path ./WireGuard -prune -o -type f \( -name "*.c" -or \
+	-name "*.h" \) -and -not \( -name "*.capnp.c" -or \
+	-name "*.capnp.h" \) -print | xargs clang-format -i --style=file
