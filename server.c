@@ -18,7 +18,9 @@
 bool is_wg_up_on_iface(const char iface[])
 {
 	wg_device *device;
-	if (wg_get_device(&device, iface) < 0) {
+	int ret = wg_get_device(&device, iface);
+	wg_free_device(device);
+	if (ret < 0) {
 		return false;
 	} else {
 		return true;
