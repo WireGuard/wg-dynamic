@@ -6,6 +6,10 @@
 #ifndef CLIENT_H
 #define CLIENT_H
 
-int connect_to_server(const char interface[]);
+#include <stdbool.h>
+
+bool is_server_in_allowed_ips(const char iface[]);
+int connect_to_server();
+int close_connection(int sock);
 
 #endif

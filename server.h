@@ -6,6 +6,10 @@
 #ifndef SERVER_H
 #define SERVER_H
 
-int setup_server(const char interface[]);
+#include <stdbool.h>
+
+bool is_wg_up_on_iface(const char iface[]);
+int setup_server();
+int handle_connections(int sock);
 
 #endif
