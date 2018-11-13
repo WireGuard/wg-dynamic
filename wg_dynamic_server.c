@@ -32,7 +32,7 @@ int main(int argc, char *argv[])
 	iface = argv[1];
 
 	if (!is_wg_up_on_iface(iface)) {
-		fprintf(stderr, "no such wireguard iface %s\n", iface);
+		fprintf(stderr, "no such wireguard interface: %s\n", iface);
 		return EXIT_FAILURE;
 	}
 
