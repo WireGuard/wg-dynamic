@@ -10,7 +10,7 @@ struct WgClientMsg {
        request @0 :WgClientRequestType;
        
        enum WgClientRequestType {
-            simple @0;
+            simpleIpv4 @0;
        }
 }
 
@@ -26,8 +26,8 @@ struct WgIpv6Addr {
        cidr @1: UInt8; # CIDR of IPv6 address
 }
 
-# server response message
-struct WgServerSimpleMsg {
+# server response messages
+struct WgServerSimpleIpv4Msg {
        leasedIpv4 @0 :WgIpv4Addr; # dynamic IPv4 leased to client
        leaseTimeout @1 :UInt32; # activity timeout for the IP lease in seconds
        ipv4Routes @2 :List(WgIpv4Addr); # IPv4 routes for client
