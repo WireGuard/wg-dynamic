@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #include <stdbool.h>
 #include <unistd.h>
+#include <string.h>
 #include <errno.h>
 #include <sys/types.h>
 #include <sys/socket.h>
@@ -27,24 +28,25 @@ bool is_server_in_allowed_ips(const char iface[])
 
 	ret = wg_get_device(&device, iface);
 	if (ret < 0) {
-		goto nodevice;
+		wg_free_device(device);
+		return false;
 	}
 
 	wg_for_each_allowedip(device->first_peer, allowedip)
 	{
 		if (allowedip->family == AF_INET6) {
-			allowed_ip6 = *(unsigned __int128 *)(&allowedip->ip6);
-			subnet_mask = ~0 << allowedip->cidr;
+			memset(&subnet_mask, 0xFF, sizeof(unsigned __int128));
+			memcpy(&allowed_ip6, &allowedip->ip6,
+			       sizeof(unsigned __int128));
+			subnet_mask <<= allowedip->cidr;
 			server_addr &= subnet_mask;
 			allowed_ip6 &= subnet_mask;
 			if (server_addr == allowed_ip6) {
+				wg_free_device(device);
 				return true;
 			}
 		}
 	}
-	return false;
-
-nodevice:
 	wg_free_device(device);
 	return false;
 }
