@@ -30,11 +30,11 @@ int main(int argc, char *argv[])
 
 	iface = argv[1];
 
-	if (!is_server_in_allowed_ips(iface)) {
+	/*if (!is_server_in_allowed_ips(iface)) {
 		fprintf(stderr, "server is not in allowed IPs for tunnel %s\n",
 			iface);
 		return EXIT_FAILURE;
-	}
+        }*/
 
 	if ((sock = connect_to_server(argv[1])) < 0) {
 		fprintf(stderr, "error connecting to server: %s\n",

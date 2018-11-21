@@ -36,7 +36,7 @@ int main(int argc, char *argv[])
 		return EXIT_FAILURE;
 	}
 
-	if ((sock = setup_server(argv[1])) < 0) {
+	if ((sock = setup_server()) < 0) {
 		fprintf(stderr, "error setting up server: %s\n",
 			strerror(-sock));
 		return EXIT_FAILURE;

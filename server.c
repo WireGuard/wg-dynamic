@@ -7,12 +7,14 @@
 #include <stdio.h>
 #include <unistd.h>
 #include <errno.h>
+#include <signal.h>
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <sys/socket.h>
 #include <arpa/inet.h>
 #include "wireguard.h"
 #include "protocol.h"
+#include "protocol.capnp.h"
 #include "server.h"
 
 bool is_wg_up_on_iface(const char iface[])
@@ -27,7 +29,7 @@ bool is_wg_up_on_iface(const char iface[])
 	}
 }
 
-int setup_server()
+int setup_server(void)
 {
 	int sock = -1;
 	int reuseaddr = 1;
@@ -54,9 +56,51 @@ int setup_server()
 	return sock;
 }
 
+static void handle_simpleipv4_request(int conn, struct sockaddr_in6 addr)
+{
+	printf("Entering simple ipv4 request handler!\n");
+}
+
 static void handle_connection(int conn, struct sockaddr_in6 addr)
 {
-	/* TODO */
+	/* get client message */
+	unsigned char client_buf[WgClientMsg_struct_bytes_count];
+	if (recv(conn, client_buf, WgClientMsg_struct_bytes_count, 0) < 0) {
+		perror("recv failed");
+		return;
+	}
+
+	/* init capnproto */
+	struct capn rc;
+	int init_mem_ret = capn_init_mem(&rc, client_buf,
+					 WgClientMsg_struct_bytes_count, 0);
+	if (init_mem_ret != 0) {
+		fprintf(stderr, "error initializing capnproto memory\n");
+		return;
+	}
+
+	/* deserialize client message */
+	WgClientMsg_ptr client_root;
+	struct WgClientMsg client_msg;
+	client_root.p = capn_getp(capn_root(&rc), 0, 1);
+	read_WgClientMsg(&client_msg, client_root);
+
+	/* free capnproto */
+	capn_free(&rc);
+
+	/* handle client request */
+	switch (client_msg.request) {
+	case WgClientMsg_WgClientRequestType_simpleIpv4:
+		handle_simpleipv4_request(conn, addr);
+		break;
+	}
+}
+
+static void catch_sigchld(int signo)
+{
+	if (signo == SIGCHLD) {
+		wait(NULL);
+	}
 }
 
 int handle_connections(int sock)
@@ -65,7 +109,11 @@ int handle_connections(int sock)
 	pid_t pid = -1;
 	struct sockaddr_in6 addr;
 	socklen_t addr_size = sizeof(addr);
-	;
+
+	if (signal(SIGCHLD, catch_sigchld) == SIG_ERR) {
+		return -errno;
+	}
+
 	while (1) {
 		conn = accept(sock, (struct sockaddr *)&addr, &addr_size);
 		if (conn < 0) {
