@@ -1,0 +1,4 @@
+*.d
+*.o
+wg-dynamic-client
+wg-dynamic-server

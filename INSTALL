@@ -1,0 +1,30 @@
+Installation Makefile Target
+============================
+
+    # make install
+
+This command takes into account several environment variables:
+
+  * PREFIX               default: /usr
+  * DESTDIR              default:
+  * BINDIR               default: $(PREFIX)/bin
+  * LIBDIR               default: $(PREFIX)/lib
+  * MANDIR               default: $(PREFIX)/share/man
+  * BASHCOMPDIR          default: $(PREFIX)/share/bash-completion/completions
+  * RUNSTATEDIR          default: /var/run
+  * PKG_CONFIG           default: pkg-config
+
+  * WITH_BASHCOMPLETION  default: [auto-detect]
+
+The first section is rather standard. The second section is not:
+
+  * WITH_BASHCOMPLETION decides whether or not bash completion files for the
+    tools are installed. This is just a nice thing for people who have bash.
+    If you don't have bash, or don't want this, set the environment variable
+    to `no'. If you'd like to force its use, even if bash-completion isn't
+    detected in DESTDIR, then set it to `yes'.
+
+If you're a simple `make && make install` kind of user, you can get away with
+not setting these variables and relying on the auto-detection. However, if
+you're writing a package for a distro, you'll want to explicitly set these,
+depending on what you want.
