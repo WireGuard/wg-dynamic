@@ -1,6 +1,6 @@
-/* SPDX-License-Identifier: LGPL-2.1+
+/* SPDX-License-Identifier: MIT
  *
- * Copyright (C) 2019 Thomas Gschwantner <tharre3@gmail.com>.
+ * Copyright (C) 2019 WireGuard LLC. All Rights Reserved.
  */
 
 #ifndef __COMMON_H__

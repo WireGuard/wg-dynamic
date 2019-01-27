@@ -1,7 +1,6 @@
-/* SPDX-License-Identifier: LGPL-2.1+
+/* SPDX-License-Identifier: MIT
  *
- * Copyright (C) 2015-2019 Jason A. Donenfeld <Jason@zx2c4.com>. All Rights Reserved.
- * Copyright (C) 2019 Thomas Gschwantner <tharre3@gmail.com>.
+ * Copyright (C) 2015-2019 WireGuard LLC. All Rights Reserved.
  */
 
 #define _POSIX_C_SOURCE 200112L
