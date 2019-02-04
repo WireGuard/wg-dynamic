@@ -22,7 +22,7 @@ endif
 PLATFORM ?= $(shell uname -s | tr '[:upper:]' '[:lower:]')
 
 CFLAGS ?= -O3
-CFLAGS += -std=gnu99 -D_GNU_SOURCE
+CFLAGS += -std=gnu99
 CFLAGS += -Wall -Wextra
 CFLAGS += -MMD -MP
 CFLAGS += -DRUNSTATEDIR="\"$(RUNSTATEDIR)\""
@@ -45,8 +45,8 @@ endif
 
 all: wg-dynamic-server wg-dynamic-client
 
-wg-dynamic-client: wg-dynamic-client.o netlink.o
-wg-dynamic-server: wg-dynamic-server.o netlink.o
+wg-dynamic-client: wg-dynamic-client.o netlink.o common.o
+wg-dynamic-server: wg-dynamic-server.o netlink.o common.o
 
 ifneq ($(V),1)
 clean:

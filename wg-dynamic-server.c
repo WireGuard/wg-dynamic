@@ -3,15 +3,18 @@
  * Copyright (C) 2015-2019 WireGuard LLC. All Rights Reserved.
  */
 
+#define _GNU_SOURCE
 #define _POSIX_C_SOURCE 200112L
 
-#include <arpa/inet.h>
+#include <inttypes.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
 
+#include <arpa/inet.h>
+#include <fcntl.h>
 #include <poll.h>
 #include <sys/socket.h>
 #include <sys/types.h>
@@ -175,36 +178,56 @@ static bool valid_peer_found(wg_device *device)
 	return false;
 }
 
-static void accept_connection(struct pollfd pollfds[])
+static int get_avail_pollfds()
 {
-	int nfds;
-
-	pollfds[0].revents = 0;
-	for (nfds = 1;; ++nfds) {
+	for (int nfds = 1;; ++nfds) {
 		if (nfds >= MAX_CONNECTIONS + 1)
-			return;
+			return -1;
 
 		if (pollfds[nfds].fd < 0)
-			break;
+			return nfds;
 	}
+}
 
-	pollfds[nfds].fd = accept(pollfds[0].fd, NULL, NULL);
-	if (pollfds[nfds].fd < 0)
-		fatal("failed to accept connection");
+static void accept_connection(int fd, struct pollfd *pfd)
+{
+	// struct sockaddr_storage;
+
+#ifdef __linux__
+	pfd->fd = accept4(fd, NULL, NULL, SOCK_NONBLOCK);
+#else
+	pfd->fd = accept(fd, NULL, NULL);
+	int res = fcntl(pfd->fd, F_GETFL, 0);
+	if (res < 0 || fcntl(pfd->fd, F_SETFL, res | O_NONBLOCK) < 0)
+		fatal("Setting socket to nonblocking failed");
+#endif
+
+	if (pfd->fd < 0)
+		fatal("Failed to accept connection");
 }
 
 static int handle_request(int fd)
 {
 	ssize_t read;
-	uint8_t buf[8192];
+	unsigned char buf[RECV_BUFSIZE + MAX_LINESIZE];
+	struct wg_dynamic_request req = {
+		.cmd = WGKEY_UNKNOWN,
+		.version = 0,
+		.first = NULL,
+		.last = NULL,
+	};
 
-	read = recv(fd, buf, sizeof buf, 0);
-	if (read == -1)
-		fatal("recv()");
+	while (1) {
+		read = recv(fd, buf, RECV_BUFSIZE, 0);
+		if (read >= 0) {
+			parse_request(&req, buf, read);
+		} else {
+			if (errno == EWOULDBLOCK || errno == EAGAIN)
+				break;
 
-	buf[read] = '\0';
-	debug("%s", buf);
-	// TODO: do some actual parsing
+			fatal("recv()");
+		}
+	}
 
 	if (close(fd))
 		debug("failed to close accept() socket");
@@ -214,7 +237,7 @@ static int handle_request(int fd)
 
 static void setup_socket(int *fd)
 {
-	int res, val = 1;
+	int val = 1;
 	struct sockaddr_in6 addr = {
 		.sin6_family = AF_INET6,
 		.sin6_port = htons(WG_DYNAMIC_PORT),
@@ -224,19 +247,16 @@ static void setup_socket(int *fd)
 
 	*fd = socket(AF_INET6, SOCK_STREAM, 0);
 	if (*fd < 0)
-		fatal("creating a socket failed");
+		fatal("Creating a socket failed");
 
-	res = setsockopt(*fd, SOL_SOCKET, SO_REUSEADDR, &val, sizeof val);
-	if (res == -1)
-		fatal("setting socket option failed");
+	if (setsockopt(*fd, SOL_SOCKET, SO_REUSEADDR, &val, sizeof val) == -1)
+		fatal("Setting socket option failed");
 
-	res = bind(*fd, (struct sockaddr *)&addr, sizeof(addr));
-	if (res == -1)
-		fatal("binding socket failed");
+	if (bind(*fd, (struct sockaddr *)&addr, sizeof(addr)) == -1)
+		fatal("Binding socket failed");
 
-	res = listen(*fd, SOMAXCONN);
-	if (res == -1)
-		fatal("listening to socket failed");
+	if (listen(*fd, SOMAXCONN) == -1)
+		fatal("Listening to socket failed");
 }
 
 static void cleanup()
@@ -255,6 +275,7 @@ static void cleanup()
 int main(int argc, char *argv[])
 {
 	const char *iface;
+	int n;
 
 	progname = argv[0];
 	inet_pton(AF_INET6, WG_DYNAMIC_ADDR, &well_known);
@@ -289,8 +310,12 @@ int main(int argc, char *argv[])
 		if (poll(pollfds, MAX_CONNECTIONS + 1, -1) == -1)
 			fatal("Failed to poll() fds");
 
-		if (pollfds[0].revents & POLLIN)
-			accept_connection(pollfds);
+		if (pollfds[0].revents & POLLIN) {
+			pollfds[0].revents = 0;
+			n = get_avail_pollfds();
+			if (n >= 0)
+				accept_connection(pollfds[0].fd, &pollfds[n]);
+		}
 
 		for (int i = 1; i < MAX_CONNECTIONS + 1; ++i) {
 			if (!(pollfds[i].revents & POLLIN))
