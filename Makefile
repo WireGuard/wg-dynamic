@@ -50,10 +50,10 @@ wg-dynamic-server: wg-dynamic-server.o netlink.o common.o
 
 ifneq ($(V),1)
 clean:
-	@for i in wg-dynamic *.o *.d; do echo "  RM      $$i"; $(RM) "$$i"; done
+	@for i in wg-dynamic-client wg-dynamic-server *.o *.d; do echo "  RM      $$i"; $(RM) "$$i"; done
 else
 clean:
-	$(RM) wg-dynamic *.o *.d
+	$(RM) wg-dynamic-client wg-dynamic-server *.o *.d
 endif
 
 install: wg

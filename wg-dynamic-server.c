@@ -189,50 +189,80 @@ static int get_avail_pollfds()
 	}
 }
 
-static void accept_connection(int fd, struct pollfd *pfd)
+static int accept_connection(int sockfd)
 {
-	// struct sockaddr_storage;
-
+	int fd;
 #ifdef __linux__
-	pfd->fd = accept4(fd, NULL, NULL, SOCK_NONBLOCK);
+	fd = accept4(sockfd, NULL, NULL, SOCK_NONBLOCK);
+	if (fd < 0)
+		fatal("Failed to accept connection");
 #else
-	pfd->fd = accept(fd, NULL, NULL);
-	int res = fcntl(pfd->fd, F_GETFL, 0);
-	if (res < 0 || fcntl(pfd->fd, F_SETFL, res | O_NONBLOCK) < 0)
+	fd = accept(sockfd, NULL, NULL);
+	if (fd < 0)
+		fatal("Failed to accept connection");
+
+	int res = fcntl(fd, F_GETFL, 0);
+	if (res < 0 || fcntl(fd, F_SETFL, res | O_NONBLOCK) < 0)
 		fatal("Setting socket to nonblocking failed");
 #endif
-
-	if (pfd->fd < 0)
-		fatal("Failed to accept connection");
+	return fd;
 }
 
-static int handle_request(int fd)
+static void close_connection(int *fd, struct wg_dynamic_request *req)
 {
-	ssize_t read;
+	if (close(*fd))
+		debug("Failed to close socket");
+
+	*fd = -1;
+	free_wg_dynamic_request(req);
+}
+
+static void response(struct wg_dynamic_request *req)
+{
+	printf("Recieved request of type %s.\n", WG_DYNAMIC_KEY[req->cmd]);
+	struct wg_dynamic_attr *cur = req->first;
+	while (cur) {
+		printf("  with attr %s.\n", WG_DYNAMIC_KEY[cur->key]);
+		cur = cur->next;
+	}
+}
+
+static bool handle_request(int fd, struct wg_dynamic_request *req)
+{
+	ssize_t bytes;
+	int ret;
 	unsigned char buf[RECV_BUFSIZE + MAX_LINESIZE];
-	struct wg_dynamic_request req = {
-		.cmd = WGKEY_UNKNOWN,
-		.version = 0,
-		.first = NULL,
-		.last = NULL,
-	};
 
 	while (1) {
-		read = recv(fd, buf, RECV_BUFSIZE, 0);
-		if (read >= 0) {
-			parse_request(&req, buf, read);
-		} else {
+		/* read = recv(fd, buf, RECV_BUFSIZE, 0); */
+		bytes = read(fd, buf, RECV_BUFSIZE);
+		if (bytes < 0) {
 			if (errno == EWOULDBLOCK || errno == EAGAIN)
 				break;
 
-			fatal("recv()");
+			// TODO: handle EINTR
+
+			debug("Reading from socket failed: %s\n",
+			      strerror(errno));
+			return true;
+		} else if (bytes == 0) {
+			debug("Client disconnected unexpectedly\n");
+			return true;
+		}
+
+		ret = parse_request(req, buf, bytes);
+		if (ret < 0) {
+			// TODO: send error message back
+			debug("Error: %s\n", strerror(-ret));
+			return true;
+		} else if (ret == 0) {
+			// TODO: complete message, validate? and answer
+			response(req);
+			return true;
 		}
 	}
 
-	if (close(fd))
-		debug("failed to close accept() socket");
-
-	return 1;
+	return false;
 }
 
 static void setup_socket(int *fd)
@@ -274,8 +304,9 @@ static void cleanup()
 
 int main(int argc, char *argv[])
 {
+	struct wg_dynamic_request reqs[MAX_CONNECTIONS] = { 0 };
+	int *sockfd = &pollfds[0].fd, n;
 	const char *iface;
-	int n;
 
 	progname = argv[0];
 	inet_pton(AF_INET6, WG_DYNAMIC_ADDR, &well_known);
@@ -304,17 +335,18 @@ int main(int argc, char *argv[])
 	if (!valid_peer_found(device))
 		die("%s has no peers with link-local allowedips\n", iface);
 
-	setup_socket(&pollfds[0].fd);
+	setup_socket(sockfd);
 
 	while (1) {
 		if (poll(pollfds, MAX_CONNECTIONS + 1, -1) == -1)
 			fatal("Failed to poll() fds");
 
 		if (pollfds[0].revents & POLLIN) {
-			pollfds[0].revents = 0;
 			n = get_avail_pollfds();
-			if (n >= 0)
-				accept_connection(pollfds[0].fd, &pollfds[n]);
+			if (n >= 0) {
+				pollfds[0].revents = 0;
+				pollfds[n].fd = accept_connection(*sockfd);
+			}
 		}
 
 		for (int i = 1; i < MAX_CONNECTIONS + 1; ++i) {
@@ -322,8 +354,8 @@ int main(int argc, char *argv[])
 				continue;
 
 			pollfds[i].revents = 0;
-			if (handle_request(pollfds[i].fd) > 0)
-				pollfds[i].fd = -1;
+			if (handle_request(pollfds[i].fd, &reqs[i - 1]))
+				close_connection(&pollfds[i].fd, &reqs[i - 1]);
 		}
 	}
 

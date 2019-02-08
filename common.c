@@ -1,44 +1,77 @@
+/* SPDX-License-Identifier: MIT
+ *
+ * Copyright (C) 2019 WireGuard LLC. All Rights Reserved.
+ */
+
+#define _DEFAULT_SOURCE
+
 #include <inttypes.h>
+#include <stdbool.h>
+#include <stdint.h>
+#include <stdlib.h>
+#include <string.h>
 
 #include <arpa/inet.h>
 
 #include "common.h"
 #include "dbg.h"
 
-struct wg_dynamic_attr *parse_value(enum wg_dynamic_key cmd, char *value)
+static bool parse_ip_cidr(struct wg_combined_ip *ip, char *value)
+{
+	uintmax_t res;
+	char *endptr;
+	char *sep = strchr(value, '/');
+	if (!sep)
+		return false;
+
+	*sep = '\0';
+	if (inet_pton(ip->family, value, &ip->ip) != 1)
+		return false;
+
+	res = strtoumax(sep + 1, &endptr, 10);
+	if (res > UINT8_MAX || *endptr != '\0' || sep + 1 == endptr)
+		return false;
+
+	// TODO: validate cidr range depending on ip->family
+	ip->cidr = (uint8_t)res;
+
+	return true;
+}
+
+static struct wg_dynamic_attr *parse_value(enum wg_dynamic_key key, char *value)
 {
 	struct wg_dynamic_attr *attr;
 	size_t len;
-	void *src;
-	struct in_addr v4addr;
-	struct in6_addr v6addr;
 	char *endptr;
-	uintmax_t res;
+	union {
+		uintmax_t uresult;
+		struct wg_combined_ip ip;
+	} data = { 0 };
 
-	switch (cmd) {
+	switch (key) {
 	case WGKEY_IPV4:
-		len = sizeof(struct in_addr);
-		if (inet_pton(AF_INET, value, &v4addr))
+		len = sizeof data.ip;
+		data.ip.family = AF_INET;
+		if (!parse_ip_cidr(&data.ip, value))
 			return NULL;
 
-		src = &v4addr;
 		break;
 	case WGKEY_IPV6:
-		len = sizeof(struct in6_addr);
-		if (inet_pton(AF_INET6, value, &v6addr))
+		len = sizeof data.ip;
+		data.ip.family = AF_INET6;
+		if (!parse_ip_cidr(&data.ip, value))
 			return NULL;
 
-		src = &v6addr;
 		break;
 	case WGKEY_LEASETIME:
-		len = sizeof(uint32_t);
-		res = strtoumax(value, &endptr, 10);
-		if (res > UINT32_MAX || *endptr != '\0')
+		len = sizeof data.uresult;
+		data.uresult = strtoumax(value, &endptr, 10);
+		if (data.uresult > UINT32_MAX || *endptr != '\0')
 			return NULL;
 
-		src = &res;
 		break;
 	default:
+		debug("Invalid key %d, aborting\n", key);
 		abort();
 	}
 
@@ -47,24 +80,37 @@ struct wg_dynamic_attr *parse_value(enum wg_dynamic_key cmd, char *value)
 		fatal("malloc()");
 
 	attr->len = len;
-	memcpy(&attr->value, src, len);
+	attr->key = key;
+	attr->next = NULL;
+	memcpy(&attr->value, &data, len);
 
 	return attr;
 }
 
-enum wg_dynamic_key parse_key(char *key)
+static enum wg_dynamic_key parse_key(char *key)
 {
 	for (enum wg_dynamic_key e = 1; e < ARRAY_SIZE(WG_DYNAMIC_KEY); ++e)
-		if (strcmp(key, WG_DYNAMIC_KEY[e]))
+		if (!strcmp(key, WG_DYNAMIC_KEY[e]))
 			return e;
 
 	return WGKEY_UNKNOWN;
 }
 
-/* consume N bytes (and return that amount) and turn it into a attr */
-ssize_t parse_line(unsigned char *buf, size_t len,
-		   struct wg_dynamic_attr **attr,
-		   struct wg_dynamic_request *req)
+/* Consumes one full line from buf, or up to MAX_LINESIZE-1 bytes if no newline
+ * character was found.
+ * If req != NULL then we expect to parse a command and will set cmd and version
+ * of req accordingly, while *attr will be set to NULL.
+ * Otherwise we expect to parse a normal key=value pair, that will be stored
+ * in a newly allocated wg_dynamic_attr, pointed to by *attr.
+ *
+ * Return values:
+ *   > 0 : Amount of bytes consumed (<= MAX_LINESIZE)
+ *   < 0 : Error
+ *   = 0 : End of message
+ */
+static ssize_t parse_line(unsigned char *buf, size_t len,
+			  struct wg_dynamic_attr **attr,
+			  struct wg_dynamic_request *req)
 {
 	unsigned char *line_end, *key_end;
 	enum wg_dynamic_key key;
@@ -75,7 +121,7 @@ ssize_t parse_line(unsigned char *buf, size_t len,
 	line_end = memchr(buf, '\n', len > MAX_LINESIZE ? MAX_LINESIZE : len);
 	if (!line_end) {
 		if (len >= MAX_LINESIZE)
-			return -1;
+			return -E2BIG;
 
 		*attr = malloc(sizeof(struct wg_dynamic_attr) + len);
 		if (!*attr)
@@ -83,53 +129,69 @@ ssize_t parse_line(unsigned char *buf, size_t len,
 
 		(*attr)->key = WGKEY_INCOMPLETE;
 		(*attr)->len = len;
+		(*attr)->next = NULL;
 		memcpy((*attr)->value, buf, len);
 
+		debug("Copied '%s' (%zu bytes)\n", (*attr)->value, len);
 		return len;
 	}
 
-	if (len == 1)
-		return -2; // TODO: \n\n
+	if (line_end == buf)
+		return 0; /* \n\n - end of message */
 
 	*line_end = '\0';
 	line_len = line_end - buf + 1;
 
 	key_end = memchr(buf, '=', line_len - 1);
 	if (!key_end)
-		return -1;
+		return -EINVAL;
 
 	*key_end = '\0';
 	key = parse_key((char *)buf);
 	if (key == WGKEY_UNKNOWN)
-		return -1;
+		return -ENOENT;
 
-	if (!req) {
+	if (req) {
 		if (key >= WGKEY_ENDCMD)
-			return -1; // TODO: unknown command, abort
+			return -ENOENT;
 
 		*attr = NULL;
 		res = strtoumax((char *)key_end + 1, &endptr, 10);
 
-		// TODO: test case where input is empty
 		if (res > UINT32_MAX || *endptr != '\0')
-			return -1;
+			return -EINVAL;
 
 		req->cmd = key;
 		req->version = (uint32_t)res;
 
 		if (req->version != 1)
-			return -1; // TODO: unknown version
+			return -EPROTONOSUPPORT;
 	} else {
 		if (key <= WGKEY_ENDCMD)
-			return -1;
+			return -ENOENT;
 
-		// TODO: empty key?
-		*attr = parse_value(req->cmd, (char *)key_end + 1);
+		*attr = parse_value(key, (char *)key_end + 1);
 		if (!*attr)
-			return -1;
+			return -EINVAL;
 	}
 
 	return line_len;
+}
+
+void free_wg_dynamic_request(struct wg_dynamic_request *req)
+{
+	struct wg_dynamic_attr *prev, *cur = req->first;
+
+	while (cur) {
+		prev = cur;
+		cur = cur->next;
+		free(prev);
+	}
+
+	req->cmd = WGKEY_UNKNOWN;
+	req->version = 0;
+	req->first = NULL;
+	req->last = NULL;
 }
 
 int parse_request(struct wg_dynamic_request *req, unsigned char *buf,
@@ -140,7 +202,7 @@ int parse_request(struct wg_dynamic_request *req, unsigned char *buf,
 	ssize_t ret;
 
 	if (memchr(buf, '\0', len))
-		return -1; /* don't allow null bytes */
+		return -EINVAL; /* don't allow null bytes */
 
 	if (req->last && req->last->key == WGKEY_INCOMPLETE) {
 		len += req->last->len;
@@ -149,9 +211,17 @@ int parse_request(struct wg_dynamic_request *req, unsigned char *buf,
 		memcpy(buf, req->last->value, req->last->len);
 		free(req->last);
 
-		req->last = req->first;
-		while (!req->last->next)
-			req->last = req->last->next;
+		if (req->first == req->last) {
+			req->first = NULL;
+			req->last = NULL;
+		} else {
+			attr = req->first;
+			while (attr->next != req->last)
+				attr = attr->next;
+
+			attr->next = NULL;
+			req->last = attr;
+		}
 	}
 
 	while (len > 0) {
@@ -159,6 +229,9 @@ int parse_request(struct wg_dynamic_request *req, unsigned char *buf,
 				 req->cmd == WGKEY_UNKNOWN ? req : NULL);
 		if (ret < 0)
 			return ret;
+
+		if (ret == 0)
+			return 0; /* \n\n - message complete */
 
 		len -= ret;
 		offset += ret;
@@ -173,5 +246,5 @@ int parse_request(struct wg_dynamic_request *req, unsigned char *buf,
 		req->last = attr;
 	}
 
-	return 0;
+	return 1;
 }

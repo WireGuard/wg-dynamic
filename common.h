@@ -9,6 +9,8 @@
 #include <stdint.h>
 #include <stdlib.h>
 
+#include <netinet/in.h>
+
 #define MAX_CONNECTIONS 16
 
 #define MAX_LINESIZE 4096
@@ -50,8 +52,18 @@ struct wg_dynamic_request {
 	struct wg_dynamic_attr *first, *last;
 };
 
+struct wg_combined_ip {
+	uint16_t family;
+	union {
+		struct in_addr ip4;
+		struct in6_addr ip6;
+	} ip;
+	uint8_t cidr;
+};
+
 #define ARRAY_SIZE(arr) (sizeof(arr) / sizeof((arr)[0]))
 
+void free_wg_dynamic_request(struct wg_dynamic_request *req);
 int parse_request(struct wg_dynamic_request *req, unsigned char *buf,
 		  size_t len);
 
