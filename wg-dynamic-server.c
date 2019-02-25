@@ -9,6 +9,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <time.h>
 
 #include <arpa/inet.h>
@@ -23,11 +24,14 @@
 #include "common.h"
 #include "dbg.h"
 #include "netlink.h"
+#include "radix-trie.h"
 
 static const char *progname;
+static const char *wg_interface;
 static struct in6_addr well_known;
 
 static wg_device *device = NULL;
+static struct radix_trie allowedips_trie;
 static struct pollfd pollfds[MAX_CONNECTIONS + 1];
 
 struct mnl_cb_data {
@@ -187,15 +191,63 @@ static int get_avail_pollfds()
 	}
 }
 
-static int accept_connection(int sockfd)
+static void rebuild_allowedips_trie()
+{
+	int ret;
+	wg_peer *peer;
+	wg_allowedip *allowedip;
+
+	radix_free(&allowedips_trie);
+
+	wg_free_device(device);
+	if (wg_get_device(&device, wg_interface))
+		fatal("Unable to access interface %s", wg_interface);
+
+	wg_for_each_peer (device, peer) {
+		wg_for_each_allowedip (peer, allowedip) {
+			if (allowedip->family == AF_INET)
+				ret = radix_insert_v4(&allowedips_trie,
+						      &allowedip->ip4,
+						      allowedip->cidr, peer);
+			else
+				ret = radix_insert_v6(&allowedips_trie,
+						      &allowedip->ip6,
+						      allowedip->cidr, peer);
+			if (ret)
+				die("Failed to rebuild allowedips trie\n");
+		}
+	}
+}
+
+static wg_key *addr_to_pubkey(struct sockaddr_storage *addr)
+{
+	wg_peer *peer;
+
+	if (addr->ss_family == AF_INET)
+		peer = radix_find_v4(&allowedips_trie, 32,
+				     &((struct sockaddr_in *)addr)->sin_addr);
+	else
+		peer = radix_find_v6(&allowedips_trie, 128,
+				     &((struct sockaddr_in6 *)addr)->sin6_addr);
+
+	if (!peer)
+		return NULL;
+
+	return &peer->public_key;
+}
+
+static int accept_connection(int sockfd, wg_key *dest)
 {
 	int fd;
+	wg_key *pubkey;
+	struct sockaddr_storage addr;
+	socklen_t size = sizeof addr;
 #ifdef __linux__
-	fd = accept4(sockfd, NULL, NULL, SOCK_NONBLOCK);
+	fd = accept4(sockfd, (struct sockaddr *)&addr, &size, SOCK_NONBLOCK);
 	if (fd < 0)
 		fatal("Failed to accept connection");
 #else
-	fd = accept(sockfd, NULL, NULL);
+	fd = accept(sockfd, (struct sockaddr *)&addr, &size);
 	if (fd < 0)
 		fatal("Failed to accept connection");
 
@@ -203,6 +255,27 @@ static int accept_connection(int sockfd)
 	if (res < 0 || fcntl(fd, F_SETFL, res | O_NONBLOCK) < 0)
 		fatal("Setting socket to nonblocking failed");
 #endif
+	pubkey = addr_to_pubkey(&addr);
+	if (!pubkey) {
+		/* our copy of allowedips is outdated, refresh */
+		rebuild_allowedips_trie();
+		pubkey = addr_to_pubkey(&addr);
+		if (!pubkey) {
+			/* either we lost the race or something is very wrong */
+			debug("Failed to match IP to pubkey\n");
+			close(fd);
+			return -1;
+		}
+	}
+	memcpy(dest, pubkey, sizeof *pubkey);
+
+	wg_key_b64_string key;
+	char out[INET6_ADDRSTRLEN];
+	wg_key_to_base64(key, *pubkey);
+	inet_ntop(addr.ss_family, &((struct sockaddr_in6 *)&addr)->sin6_addr,
+		  out, sizeof(out));
+	debug("%s has pubkey: %s\n", out, key);
+
 	return fd;
 }
 
@@ -256,6 +329,7 @@ static void setup_socket(int *fd)
 
 static void cleanup()
 {
+	radix_free(&allowedips_trie);
 	wg_free_device(device);
 
 	for (int i = 0; i < MAX_CONNECTIONS + 1; ++i) {
@@ -271,7 +345,6 @@ int main(int argc, char *argv[])
 {
 	struct wg_dynamic_request reqs[MAX_CONNECTIONS] = { 0 };
 	int *sockfd = &pollfds[0].fd, n;
-	const char *iface;
 
 	progname = argv[0];
 	inet_pton(AF_INET6, WG_DYNAMIC_ADDR, &well_known);
@@ -286,19 +359,22 @@ int main(int argc, char *argv[])
 	if (argc != 2)
 		usage();
 
-	iface = argv[1];
+	radix_init(&allowedips_trie);
+
+	wg_interface = argv[1];
 	if (atexit(cleanup))
 		die("Failed to set exit function\n");
 
-	if (wg_get_device(&device, iface))
-		fatal("Unable to access interface %s", iface);
+	rebuild_allowedips_trie();
 
 	if (!validate_link_local_ip(device->ifindex))
 		// TODO: assign IP instead?
-		die("%s needs to have %s assigned\n", iface, WG_DYNAMIC_ADDR);
+		die("%s needs to have %s assigned\n", wg_interface,
+		    WG_DYNAMIC_ADDR);
 
 	if (!valid_peer_found(device))
-		die("%s has no peers with link-local allowedips\n", iface);
+		die("%s has no peers with link-local allowedips\n",
+		    wg_interface);
 
 	setup_socket(sockfd);
 
@@ -310,7 +386,8 @@ int main(int argc, char *argv[])
 			n = get_avail_pollfds();
 			if (n >= 0) {
 				pollfds[0].revents = 0;
-				pollfds[n].fd = accept_connection(*sockfd);
+				pollfds[n].fd = accept_connection(
+					*sockfd, &reqs[n - 1].pubkey);
 			}
 		}
 

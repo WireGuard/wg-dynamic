@@ -9,8 +9,9 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdlib.h>
-
 #include <netinet/in.h>
+
+#include "netlink.h"
 
 #define MAX_CONNECTIONS 16
 
@@ -50,6 +51,7 @@ struct wg_dynamic_attr {
 struct wg_dynamic_request {
 	enum wg_dynamic_key cmd;
 	uint32_t version;
+	wg_key pubkey;
 	struct wg_dynamic_attr *first, *last;
 };
 
