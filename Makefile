@@ -46,7 +46,7 @@ endif
 all: wg-dynamic-server wg-dynamic-client
 
 wg-dynamic-client: wg-dynamic-client.o netlink.o common.o
-wg-dynamic-server: wg-dynamic-server.o netlink.o common.o
+wg-dynamic-server: wg-dynamic-server.o netlink.o radix-trie.o common.o
 
 ifneq ($(V),1)
 clean:
