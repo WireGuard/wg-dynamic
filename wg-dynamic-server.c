@@ -245,11 +245,11 @@ static int accept_connection(int sockfd, wg_key *dest)
 #ifdef __linux__
 	fd = accept4(sockfd, (struct sockaddr *)&addr, &size, SOCK_NONBLOCK);
 	if (fd < 0)
-		fatal("Failed to accept connection");
+		return -errno;
 #else
 	fd = accept(sockfd, (struct sockaddr *)&addr, &size);
 	if (fd < 0)
-		fatal("Failed to accept connection");
+		return -errno;
 
 	int res = fcntl(fd, F_GETFL, 0);
 	if (res < 0 || fcntl(fd, F_SETFL, res | O_NONBLOCK) < 0)
@@ -262,9 +262,8 @@ static int accept_connection(int sockfd, wg_key *dest)
 		pubkey = addr_to_pubkey(&addr);
 		if (!pubkey) {
 			/* either we lost the race or something is very wrong */
-			debug("Failed to match IP to pubkey\n");
 			close(fd);
-			return -1;
+			return -ENOENT;
 		}
 	}
 	memcpy(dest, pubkey, sizeof *pubkey);
@@ -277,6 +276,23 @@ static int accept_connection(int sockfd, wg_key *dest)
 	debug("%s has pubkey: %s\n", out, key);
 
 	return fd;
+}
+
+static void accept_incoming(int sockfd, struct wg_dynamic_request *reqs)
+{
+	int n, fd;
+	while ((n = get_avail_pollfds()) >= 0) {
+		fd = accept_connection(sockfd, &reqs[n - 1].pubkey);
+		if (fd < 0) {
+			if (fd == -ENOENT)
+				debug("Failed to match IP to pubkey\n");
+			else if (fd != -EAGAIN && fd != -EWOULDBLOCK)
+				debug("Failed to accept connection: %s\n",
+				      strerror(-fd));
+			break;
+		}
+		pollfds[n].fd = fd;
+	}
 }
 
 static void close_connection(int *fd, struct wg_dynamic_request *req)
@@ -305,7 +321,7 @@ static void send_error(int fd, int ret)
 
 static void setup_socket(int *fd)
 {
-	int val = 1;
+	int val = 1, res;
 	struct sockaddr_in6 addr = {
 		.sin6_family = AF_INET6,
 		.sin6_port = htons(WG_DYNAMIC_PORT),
@@ -316,6 +332,10 @@ static void setup_socket(int *fd)
 	*fd = socket(AF_INET6, SOCK_STREAM, 0);
 	if (*fd < 0)
 		fatal("Creating a socket failed");
+
+	res = fcntl(*fd, F_GETFL, 0);
+	if (res < 0 || fcntl(*fd, F_SETFL, res | O_NONBLOCK) < 0)
+		fatal("Setting socket to nonblocking failed");
 
 	if (setsockopt(*fd, SOL_SOCKET, SO_REUSEADDR, &val, sizeof val) == -1)
 		fatal("Setting socket option failed");
@@ -344,7 +364,7 @@ static void cleanup()
 int main(int argc, char *argv[])
 {
 	struct wg_dynamic_request reqs[MAX_CONNECTIONS] = { 0 };
-	int *sockfd = &pollfds[0].fd, n;
+	int *sockfd = &pollfds[0].fd;
 
 	progname = argv[0];
 	inet_pton(AF_INET6, WG_DYNAMIC_ADDR, &well_known);
@@ -383,12 +403,8 @@ int main(int argc, char *argv[])
 			fatal("Failed to poll() fds");
 
 		if (pollfds[0].revents & POLLIN) {
-			n = get_avail_pollfds();
-			if (n >= 0) {
-				pollfds[0].revents = 0;
-				pollfds[n].fd = accept_connection(
-					*sockfd, &reqs[n - 1].pubkey);
-			}
+			pollfds[0].revents = 0;
+			accept_incoming(*sockfd, reqs);
 		}
 
 		for (int i = 1; i < MAX_CONNECTIONS + 1; ++i) {
