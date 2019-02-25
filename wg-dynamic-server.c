@@ -29,10 +29,6 @@ static struct in6_addr well_known;
 
 static wg_device *device = NULL;
 static struct pollfd pollfds[MAX_CONNECTIONS + 1];
-static struct outbuf {
-	unsigned char *buf;
-	size_t len;
-} outbufs[MAX_CONNECTIONS] = { 0 };
 
 struct mnl_cb_data {
 	uint32_t ifindex;
@@ -210,22 +206,16 @@ static int accept_connection(int sockfd)
 	return fd;
 }
 
-static void close_connection(int *fd, struct wg_dynamic_request *req,
-	struct outbuf *outbuf)
+static void close_connection(int *fd, struct wg_dynamic_request *req)
 {
 	if (close(*fd))
 		debug("Failed to close socket");
 
 	*fd = -1;
-
 	free_wg_dynamic_request(req);
-
-	free(outbuf->buf);
-	outbuf->buf = NULL;
-	outbuf->len = 0;
 }
 
-static bool send_response(int slot, int fd, struct wg_dynamic_request *req)
+static bool send_response(int fd, struct wg_dynamic_request *req)
 {
 	unsigned char buf[8192]; /* FIXME */
 	ssize_t len;
@@ -251,14 +241,13 @@ static bool send_response(int slot, int fd, struct wg_dynamic_request *req)
 	if (!newbuf)
 		fatal("Failed malloc()");
 	memcpy(newbuf, buf + len - to_write, to_write);
-	free(outbufs[slot].buf);
-	outbufs[slot].buf = newbuf;
-	outbufs[slot].len = to_write;
-	pollfds[slot].events |= POLLOUT;
+	free(req->buf);
+	req->buf = newbuf;
+	req->buflen = to_write;
 	return false;
 }
 
-static bool send_error(int slot, int fd, int ret)
+static bool send_error(int fd, int ret)
 {
 	debug("Error: %s\n", strerror(ret));
 	return true;
@@ -353,11 +342,11 @@ int main(int argc, char *argv[])
 				continue;
 
 			pollfds[i].revents &= ~POLLOUT;
-			if (send_message(pollfds[i].fd, outbufs[i - 1].buf,
-					 &outbufs[i - 1].len))
-				close_connection(&pollfds[i].fd,
-						 &reqs[i - 1],
-						 &outbufs[i - 1]);
+			if (send_message(pollfds[i].fd, reqs[i - 1].buf,
+					 &reqs[i - 1].buflen))
+				close_connection(&pollfds[i].fd, &reqs[i - 1]);
+			else
+				pollfds[i].events |= POLLOUT;
 		}
 
 		for (int i = 1; i < MAX_CONNECTIONS + 1; ++i) {
@@ -365,11 +354,11 @@ int main(int argc, char *argv[])
 				continue;
 
 			pollfds[i].revents &= ~POLLIN;
-			if (handle_request(i, pollfds[i].fd, &reqs[i - 1],
+			if (handle_request(pollfds[i].fd, &reqs[i - 1],
 					   send_response, send_error))
-				close_connection(&pollfds[i].fd,
-						 &reqs[i - 1],
-						 &outbufs[i - 1]);
+				close_connection(&pollfds[i].fd, &reqs[i - 1]);
+			else
+				pollfds[i].events |= POLLOUT;
 		}
 	}
 

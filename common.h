@@ -50,6 +50,8 @@ struct wg_dynamic_attr {
 struct wg_dynamic_request {
 	enum wg_dynamic_key cmd;
 	uint32_t version;
+	unsigned char *buf;
+	size_t buflen;
 	struct wg_dynamic_attr *first, *last;
 };
 
@@ -65,8 +67,8 @@ struct wg_combined_ip {
 #define ARRAY_SIZE(arr) (sizeof(arr) / sizeof((arr)[0]))
 
 void free_wg_dynamic_request(struct wg_dynamic_request *req);
-bool handle_request(int user_data, int fd, struct wg_dynamic_request *req,
-		    bool (*success)(int, int, struct wg_dynamic_request *),
-		    bool (*error)(int, int, int));
+bool handle_request(int fd, struct wg_dynamic_request *req,
+		    bool (*success)(int, struct wg_dynamic_request *),
+		    bool (*error)(int, int));
 bool send_message(int fd, unsigned char *buf, size_t *len);
 #endif
