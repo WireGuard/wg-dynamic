@@ -29,6 +29,10 @@ static struct in6_addr well_known;
 
 static wg_device *device = NULL;
 static struct pollfd pollfds[MAX_CONNECTIONS + 1];
+static struct outbuf {
+	unsigned char *buf;
+	size_t len;
+} outbufs[MAX_CONNECTIONS] = { 0 };
 
 struct mnl_cb_data {
 	uint32_t ifindex;
@@ -206,28 +210,58 @@ static int accept_connection(int sockfd)
 	return fd;
 }
 
-static void close_connection(int *fd, struct wg_dynamic_request *req)
+static void close_connection(int *fd, struct wg_dynamic_request *req,
+	struct outbuf *outbuf)
 {
 	if (close(*fd))
 		debug("Failed to close socket");
 
 	*fd = -1;
+
 	free_wg_dynamic_request(req);
+
+	free(outbuf->buf);
+	outbuf->buf = NULL;
+	outbuf->len = 0;
 }
 
-static void send_response(int fd, struct wg_dynamic_request *req)
+static bool send_response(int slot, int fd, struct wg_dynamic_request *req)
 {
+	unsigned char buf[8192]; /* FIXME */
+	ssize_t len;
+	unsigned char *newbuf;
+	size_t to_write;
+
 	printf("Recieved request of type %s.\n", WG_DYNAMIC_KEY[req->cmd]);
 	struct wg_dynamic_attr *cur = req->first;
 	while (cur) {
 		printf("  with attr %s.\n", WG_DYNAMIC_KEY[cur->key]);
 		cur = cur->next;
 	}
+
+#define REPLY "reply=fake\n\n"
+	len = sizeof REPLY - 1;
+	memcpy(buf, REPLY, len);
+
+	to_write = len;
+	if (send_message(fd, buf, &to_write))
+		return true;
+
+	newbuf = malloc(to_write);
+	if (!newbuf)
+		fatal("Failed malloc()");
+	memcpy(newbuf, buf + len - to_write, to_write);
+	free(outbufs[slot].buf);
+	outbufs[slot].buf = newbuf;
+	outbufs[slot].len = to_write;
+	pollfds[slot].events |= POLLOUT;
+	return false;
 }
 
-static void send_error(int fd, int ret)
+static bool send_error(int slot, int fd, int ret)
 {
 	debug("Error: %s\n", strerror(ret));
+	return true;
 }
 
 static void setup_socket(int *fd)
@@ -315,13 +349,27 @@ int main(int argc, char *argv[])
 		}
 
 		for (int i = 1; i < MAX_CONNECTIONS + 1; ++i) {
+			if (!(pollfds[i].revents & POLLOUT))
+				continue;
+
+			pollfds[i].revents &= ~POLLOUT;
+			if (send_message(pollfds[i].fd, outbufs[i - 1].buf,
+					 &outbufs[i - 1].len))
+				close_connection(&pollfds[i].fd,
+						 &reqs[i - 1],
+						 &outbufs[i - 1]);
+		}
+
+		for (int i = 1; i < MAX_CONNECTIONS + 1; ++i) {
 			if (!(pollfds[i].revents & POLLIN))
 				continue;
 
-			pollfds[i].revents = 0;
-			if (handle_request(pollfds[i].fd, &reqs[i - 1],
+			pollfds[i].revents &= ~POLLIN;
+			if (handle_request(i, pollfds[i].fd, &reqs[i - 1],
 					   send_response, send_error))
-				close_connection(&pollfds[i].fd, &reqs[i - 1]);
+				close_connection(&pollfds[i].fd,
+						 &reqs[i - 1],
+						 &outbufs[i - 1]);
 		}
 	}
 

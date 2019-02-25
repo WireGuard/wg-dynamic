@@ -248,9 +248,9 @@ static int parse_request(struct wg_dynamic_request *req, unsigned char *buf,
 	return 1;
 }
 
-bool handle_request(int fd, struct wg_dynamic_request *req,
-		    void (*success)(int, struct wg_dynamic_request *req),
-		    void (*error)(int, int))
+bool handle_request(int user_data, int fd, struct wg_dynamic_request *req,
+		    bool (*success)(int, int, struct wg_dynamic_request *),
+		    bool (*error)(int, int, int))
 {
 	ssize_t bytes;
 	int ret;
@@ -273,14 +273,35 @@ bool handle_request(int fd, struct wg_dynamic_request *req,
 		}
 
 		ret = parse_request(req, buf, bytes);
-		if (ret < 0) {
-			error(fd, -ret);
-			return true;
-		} else if (ret == 0) {
-			success(fd, req);
-			return true;
-		}
+		if (ret < 0)
+			return error(user_data, fd, -ret);
+		else if (ret == 0)
+			return success(user_data, fd, req);
 	}
 
 	return false;
+}
+
+bool send_message(int fd, unsigned char *buf, size_t *len)
+{
+	ssize_t bytes;
+	size_t offset = 0;
+
+	while (*len) {
+		bytes = write(fd, buf + offset, *len);
+		if (bytes < 0) {
+			if (errno == EWOULDBLOCK || errno == EAGAIN)
+				break;
+
+			// TODO: need to handle EINTR even though fd is SOCK_NONBLOCK?
+
+			debug("Writing to socket %d failed: %s\n",
+			      fd, strerror(errno));
+			return true;
+		}
+
+		*len -= bytes;
+		offset += bytes;
+	}
+	return *len == 0;
 }
