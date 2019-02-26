@@ -342,14 +342,12 @@ int main(int argc, char *argv[])
 				continue;
 
 			pollfds[i].revents &= ~POLLOUT;
-			if (reqs[i - 1].buf
-			    && send_message(pollfds[i].fd, reqs[i - 1].buf,
-					    &reqs[i - 1].buflen)) {
+			if (send_message(pollfds[i].fd, reqs[i - 1].buf,
+					 &reqs[i - 1].buflen)) {
 				close_connection(&pollfds[i].fd, &reqs[i - 1]);
+				pollfds[i].events &= ~POLLOUT;
 				continue;
 			}
-			else
-				pollfds[i].events |= POLLOUT;
 		}
 
 		for (int i = 1; i < MAX_CONNECTIONS + 1; ++i) {
@@ -360,7 +358,7 @@ int main(int argc, char *argv[])
 			if (handle_request(pollfds[i].fd, &reqs[i - 1],
 					   send_response, send_error))
 				close_connection(&pollfds[i].fd, &reqs[i - 1]);
-			else
+			else if (reqs[i - 1].buf)
 				pollfds[i].events |= POLLOUT;
 		}
 	}
