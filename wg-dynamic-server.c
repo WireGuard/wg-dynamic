@@ -342,9 +342,12 @@ int main(int argc, char *argv[])
 				continue;
 
 			pollfds[i].revents &= ~POLLOUT;
-			if (send_message(pollfds[i].fd, reqs[i - 1].buf,
-					 &reqs[i - 1].buflen))
+			if (reqs[i - 1].buf
+			    && send_message(pollfds[i].fd, reqs[i - 1].buf,
+					    &reqs[i - 1].buflen)) {
 				close_connection(&pollfds[i].fd, &reqs[i - 1]);
+				continue;
+			}
 			else
 				pollfds[i].events |= POLLOUT;
 		}
