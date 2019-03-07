@@ -209,7 +209,7 @@ static int accept_connection(int sockfd)
 static void close_connection(int *fd, struct wg_dynamic_request *req)
 {
 	if (close(*fd))
-		debug("Failed to close socket");
+		debug("Failed to close socket\n");
 
 	*fd = -1;
 	free_wg_dynamic_request(req);
