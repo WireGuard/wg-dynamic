@@ -22,6 +22,9 @@
 static const char WG_DYNAMIC_ADDR[] = "fe80::";
 static const uint16_t WG_DYNAMIC_PORT = 1337;
 
+#define WG_DYNAMIC_PROTOCOL_VERSION 1
+#define WG_DYNAMIC_LEASETIME 3600
+
 #define ITEMS                                                                  \
 	E(WGKEY_UNKNOWN, "") /* must be the first entry */                     \
 	/* CMD START */                                                        \
@@ -52,6 +55,8 @@ struct wg_dynamic_request {
 	enum wg_dynamic_key cmd;
 	uint32_t version;
 	wg_key pubkey;
+	unsigned char *buf;
+	size_t buflen;
 	struct wg_dynamic_attr *first, *last;
 };
 
@@ -68,7 +73,8 @@ struct wg_combined_ip {
 
 void free_wg_dynamic_request(struct wg_dynamic_request *req);
 bool handle_request(int fd, struct wg_dynamic_request *req,
-		    void (*success)(int, struct wg_dynamic_request *req),
-		    void (*error)(int, int));
-
+		    bool (*success)(int, struct wg_dynamic_request *),
+		    bool (*error)(int, int));
+size_t send_message(int fd, unsigned char *buf, size_t *len);
+size_t printf_to_buf(char *buf, size_t bufsize, size_t len, char *fmt, ...);
 #endif

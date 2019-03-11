@@ -26,6 +26,8 @@
 #include "netlink.h"
 #include "radix-trie.h"
 
+#define MAX_RESPONSE_SIZE 8192
+
 static const char *progname;
 static const char *wg_interface;
 static struct in6_addr well_known;
@@ -298,25 +300,151 @@ static void accept_incoming(int sockfd, struct wg_dynamic_request *reqs)
 static void close_connection(int *fd, struct wg_dynamic_request *req)
 {
 	if (close(*fd))
-		debug("Failed to close socket");
+		debug("Failed to close socket\n");
 
 	*fd = -1;
 	free_wg_dynamic_request(req);
 }
 
-static void send_response(int fd, struct wg_dynamic_request *req)
+static int allocate_from_pool(struct wg_dynamic_request * const req,
+			      struct wg_combined_ip addrs[2], uint32_t *expires)
 {
+	struct wg_dynamic_attr *attr;
+	int i;
+
+	/* NOTE: "allocating" whatever client asks for */
+	/* TODO: choose an ip address from pool of available
+	 * addresses, together with an appropriate lease time */
+	/* NOTE: the pool is to be drawn from what routes are pointing
+	 * to the wg interface, and kept up to date as the routing
+	 * table changes */
+
+	*expires = time(NULL) + WG_DYNAMIC_LEASETIME;
+
+	i = 0;
+	attr = req->first;
+	while (attr) {
+		switch (attr->key) {
+		case WGKEY_IPV4:
+			/* fall through */
+		case WGKEY_IPV6:
+			if (i > 1)
+				break;
+			memcpy(&addrs[i++], attr->value, sizeof *addrs);
+			break;
+		case WGKEY_LEASETIME:
+			memcpy(expires, attr->value, sizeof(uint32_t));
+			*expires += time(NULL);
+			break;
+		default:
+			debug("Ignoring invalid attribute for request_ip: %d\n",
+			      attr->key);
+		}
+
+		attr = attr->next;
+	}
+
+	return 0;
+}
+
+static bool send_error(int fd, int ret)
+{
+	debug("Error: %s\n", strerror(ret));
+	return true;
+}
+
+static void send_later(struct wg_dynamic_request *req,
+		       unsigned char * const buf, size_t msglen)
+{
+	unsigned char *newbuf = malloc(msglen);
+	if (!newbuf)
+		fatal("Failed malloc()");
+	memcpy(newbuf, buf, msglen);
+
+	free(req->buf);
+	req->buf = newbuf;
+	req->buflen = msglen;
+}
+
+static size_t serialise_lease(char *buf, size_t bufsize, size_t offset,
+			      struct wg_combined_ip addrs[2], uint32_t expires)
+{
+	char addrbuf[INET6_ADDRSTRLEN];
+	char *fmt;
+	size_t w;
+
+	w = 0;
+	for (int i = 0; i < 2; i++) {
+		switch (addrs[i].family) {
+		case AF_INET:
+			fmt = "ipv4=%s\n";
+			break;
+		case AF_INET6:
+			fmt = "ipv6=%s\n";
+			break;
+		default:
+			fatal("Invalid family: %d", addrs[i].family);
+		}
+
+		if (!inet_ntop(addrs[i].family, &addrs[i].ip.ip4, addrbuf,
+			       sizeof addrbuf))
+			fatal("Failed inet_ntop");
+		w += printf_to_buf(buf, bufsize, offset, fmt, addrbuf);
+		offset += w;
+	}
+
+	if (w)
+		offset += printf_to_buf(buf, bufsize, offset, "leasetime=%u\n",
+					expires);
+
+	return offset;
+}
+
+static bool send_response(int fd, struct wg_dynamic_request *req)
+{
+	int ret;
+	unsigned char buf[MAX_RESPONSE_SIZE+1];
+	size_t msglen;
+	size_t written;
+	struct wg_combined_ip addrs[2] = { 0 };
+	uint32_t expires;
+
 	printf("Recieved request of type %s.\n", WG_DYNAMIC_KEY[req->cmd]);
 	struct wg_dynamic_attr *cur = req->first;
 	while (cur) {
 		printf("  with attr %s.\n", WG_DYNAMIC_KEY[cur->key]);
 		cur = cur->next;
 	}
-}
 
-static void send_error(int fd, int ret)
-{
-	debug("Error: %s\n", strerror(ret));
+	ret = EINVAL;
+	msglen = 0;
+	switch (req->cmd) {
+	case WGKEY_REQUEST_IP:
+		msglen = printf_to_buf((char *) buf, sizeof buf, 0, "%s=%d\n",
+					WG_DYNAMIC_KEY[req->cmd],
+					WG_DYNAMIC_PROTOCOL_VERSION);
+		ret = allocate_from_pool(req, addrs, &expires);
+		if (ret)
+			break;
+		msglen += serialise_lease((char *) buf, sizeof buf, msglen,
+				    addrs, expires);
+
+		/* TODO: inform wg about the new address (or maybe if (send_rather wait until after we've closed this tcp if (send_connection?)  */
+
+		break;
+	default:
+		debug("Unknown command: %d\n", req->cmd);
+		return true;
+	}
+
+	msglen += printf_to_buf((char *) buf, sizeof buf, msglen,
+					"errno=%d\n\n", ret);
+	written = send_message(fd, buf, &msglen);
+	if (!msglen)
+		return true;
+
+	send_later(req, buf + written, msglen);
+	return false;
 }
 
 static void setup_socket(int *fd)
@@ -408,13 +536,28 @@ int main(int argc, char *argv[])
 		}
 
 		for (int i = 1; i < MAX_CONNECTIONS + 1; ++i) {
+			if (!(pollfds[i].revents & POLLOUT))
+				continue;
+
+			pollfds[i].revents &= ~POLLOUT;
+			if (send_message(pollfds[i].fd, reqs[i - 1].buf,
+					 &reqs[i - 1].buflen)) {
+				close_connection(&pollfds[i].fd, &reqs[i - 1]);
+				pollfds[i].events &= ~POLLOUT;
+				continue;
+			}
+		}
+
+		for (int i = 1; i < MAX_CONNECTIONS + 1; ++i) {
 			if (!(pollfds[i].revents & POLLIN))
 				continue;
 
-			pollfds[i].revents = 0;
+			pollfds[i].revents &= ~POLLIN;
 			if (handle_request(pollfds[i].fd, &reqs[i - 1],
 					   send_response, send_error))
 				close_connection(&pollfds[i].fd, &reqs[i - 1]);
+			else if (reqs[i - 1].buf)
+				pollfds[i].events |= POLLOUT;
 		}
 	}
 
