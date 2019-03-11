@@ -9,6 +9,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdlib.h>
+#include <stdarg.h>
 #include <string.h>
 #include <unistd.h>
 
@@ -166,7 +167,7 @@ static ssize_t parse_line(unsigned char *buf, size_t len,
 		req->cmd = key;
 		req->version = (uint32_t)res;
 
-		if (req->version != 1)
+		if (req->version != WG_DYNAMIC_PROTOCOL_VERSION)
 			return -EPROTONOSUPPORT;
 	} else {
 		if (key <= WGKEY_ENDCMD)
@@ -285,7 +286,7 @@ bool handle_request(int fd, struct wg_dynamic_request *req,
 	return false;
 }
 
-bool send_message(int fd, unsigned char *buf, size_t *len)
+size_t send_message(int fd, unsigned char *buf, size_t *len)
 {
 	ssize_t bytes;
 	size_t offset = 0;
@@ -298,13 +299,29 @@ bool send_message(int fd, unsigned char *buf, size_t *len)
 
 			// TODO: handle EINTR
 
-			debug("Writing to socket %d failed: %s\n",
-			      fd, strerror(errno));
-			return true;
+			debug("Writing to socket %d failed: %s\n", fd,
+			      strerror(errno));
+			*len = 0;
+			return 0;
 		}
 
 		*len -= bytes;
 		offset += bytes;
 	}
-	return *len == 0;
+
+	return offset;
+}
+
+size_t printf_to_buf(char *buf, size_t bufsize, size_t offset,
+		     char *fmt, ...)
+{
+	va_list ap;
+	va_start(ap, fmt);
+	int n = vsnprintf(buf + offset, bufsize - offset, fmt, ap);
+	va_end(ap);
+	if (n < 0)
+		fatal("Failed snprintf");
+	if (n + offset >= bufsize)
+		fatal("Outbuffer too small");
+	return n;
 }
