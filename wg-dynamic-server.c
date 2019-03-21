@@ -115,8 +115,7 @@ static bool validate_link_local_ip(uint32_t ifindex)
 	int ret;
 	unsigned int seq, portid;
 	struct mnl_cb_data cb_data = {
-		.ifindex = ifindex,
-		.valid_ip_found = false,
+		.ifindex = ifindex, .valid_ip_found = false,
 	};
 
 	nl = mnl_socket_open(NETLINK_ROUTE);
@@ -306,7 +305,7 @@ static void close_connection(int *fd, struct wg_dynamic_request *req)
 	free_wg_dynamic_request(req);
 }
 
-static int allocate_from_pool(struct wg_dynamic_request * const req,
+static int allocate_from_pool(struct wg_dynamic_request *const req,
 			      struct wg_combined_ip addrs[2], uint32_t *expires)
 {
 	struct wg_dynamic_attr *attr;
@@ -326,7 +325,7 @@ static int allocate_from_pool(struct wg_dynamic_request * const req,
 	while (attr) {
 		switch (attr->key) {
 		case WGKEY_IPV4:
-			/* fall through */
+		/* fall through */
 		case WGKEY_IPV6:
 			if (i > 1)
 				break;
@@ -353,8 +352,8 @@ static bool send_error(int fd, int ret)
 	return true;
 }
 
-static void send_later(struct wg_dynamic_request *req,
-		       unsigned char * const buf, size_t msglen)
+static void send_later(struct wg_dynamic_request *req, unsigned char *const buf,
+		       size_t msglen)
 {
 	unsigned char *newbuf = malloc(msglen);
 	if (!newbuf)
@@ -403,7 +402,7 @@ static size_t serialise_lease(char *buf, size_t bufsize, size_t offset,
 static bool send_response(int fd, struct wg_dynamic_request *req)
 {
 	int ret;
-	unsigned char buf[MAX_RESPONSE_SIZE+1];
+	unsigned char buf[MAX_RESPONSE_SIZE + 1];
 	size_t msglen;
 	size_t written;
 	struct wg_combined_ip addrs[2] = { 0 };
@@ -420,14 +419,14 @@ static bool send_response(int fd, struct wg_dynamic_request *req)
 	msglen = 0;
 	switch (req->cmd) {
 	case WGKEY_REQUEST_IP:
-		msglen = printf_to_buf((char *) buf, sizeof buf, 0, "%s=%d\n",
-					WG_DYNAMIC_KEY[req->cmd],
-					WG_DYNAMIC_PROTOCOL_VERSION);
+		msglen = printf_to_buf((char *)buf, sizeof buf, 0, "%s=%d\n",
+				       WG_DYNAMIC_KEY[req->cmd],
+				       WG_DYNAMIC_PROTOCOL_VERSION);
 		ret = allocate_from_pool(req, addrs, &expires);
 		if (ret)
 			break;
-		msglen += serialise_lease((char *) buf, sizeof buf, msglen,
-				    addrs, expires);
+		msglen += serialise_lease((char *)buf, sizeof buf, msglen,
+					  addrs, expires);
 
 		/* TODO: inform wg about the new address (or maybe if (send_rather wait until after we've closed this tcp if (send_connection?)  */
 
@@ -437,8 +436,8 @@ static bool send_response(int fd, struct wg_dynamic_request *req)
 		return true;
 	}
 
-	msglen += printf_to_buf((char *) buf, sizeof buf, msglen,
-					"errno=%d\n\n", ret);
+	msglen += printf_to_buf((char *)buf, sizeof buf, msglen, "errno=%d\n\n",
+				ret);
 	written = send_message(fd, buf, &msglen);
 	if (!msglen)
 		return true;
@@ -499,8 +498,7 @@ int main(int argc, char *argv[])
 
 	for (int i = 0; i < MAX_CONNECTIONS + 1; ++i) {
 		pollfds[i] = (struct pollfd){
-			.fd = -1,
-			.events = POLLIN,
+			.fd = -1, .events = POLLIN,
 		};
 	}
 

@@ -268,8 +268,8 @@ bool handle_request(int fd, struct wg_dynamic_request *req,
 
 			// TODO: handle EINTR
 
-			debug("Reading from socket %d failed: %s\n",
-			      fd, strerror(errno));
+			debug("Reading from socket %d failed: %s\n", fd,
+			      strerror(errno));
 			return true;
 		} else if (bytes == 0) {
 			debug("Client disconnected unexpectedly\n");
@@ -312,8 +312,7 @@ size_t send_message(int fd, unsigned char *buf, size_t *len)
 	return offset;
 }
 
-size_t printf_to_buf(char *buf, size_t bufsize, size_t offset,
-		     char *fmt, ...)
+size_t printf_to_buf(char *buf, size_t bufsize, size_t offset, char *fmt, ...)
 {
 	va_list ap;
 	va_start(ap, fmt);

@@ -18,7 +18,7 @@ int main(int argc __attribute__((unused)), char *argv[] __attribute__((unused)))
 		perror("Unable to get device names");
 		return 1;
 	}
-	wg_for_each_device_name(device_names, device_name, len) {
+	wg_for_each_device_name (device_names, device_name, len) {
 		wg_device *device;
 		wg_peer *peer;
 		wg_key_b64_string key;
@@ -29,7 +29,7 @@ int main(int argc __attribute__((unused)), char *argv[] __attribute__((unused)))
 		}
 		wg_key_to_base64(key, device->public_key);
 		printf("%s has public key %s\n", device_name, key);
-		wg_for_each_peer(device, peer) {
+		wg_for_each_peer (device, peer) {
 			wg_key_to_base64(key, peer->public_key);
 			printf(" - peer %s\n", key);
 		}
