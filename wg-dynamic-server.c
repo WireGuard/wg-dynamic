@@ -306,10 +306,9 @@ static void close_connection(int *fd, struct wg_dynamic_request *req)
 }
 
 static int allocate_from_pool(struct wg_dynamic_request *const req,
-			      struct wg_combined_ip addrs[2], uint32_t *expires)
+			      struct wg_lease *lease)
 {
 	struct wg_dynamic_attr *attr;
-	int i;
 
 	/* NOTE: "allocating" whatever client asks for */
 	/* TODO: choose an ip address from pool of available
@@ -318,22 +317,22 @@ static int allocate_from_pool(struct wg_dynamic_request *const req,
 	 * to the wg interface, and kept up to date as the routing
 	 * table changes */
 
-	*expires = time(NULL) + WG_DYNAMIC_LEASETIME;
+	lease->leasetime = WG_DYNAMIC_LEASETIME;
 
-	i = 0;
 	attr = req->first;
 	while (attr) {
 		switch (attr->key) {
 		case WGKEY_IPV4:
-		/* fall through */
+			memcpy(&lease->ip4, attr->value,
+			       sizeof(struct wg_combined_ip));
+			break;
 		case WGKEY_IPV6:
-			if (i > 1)
-				break;
-			memcpy(&addrs[i++], attr->value, sizeof *addrs);
+			memcpy(&lease->ip6, attr->value,
+			       sizeof(struct wg_combined_ip));
 			break;
 		case WGKEY_LEASETIME:
-			memcpy(expires, attr->value, sizeof(uint32_t));
-			*expires += time(NULL);
+			memcpy(&lease->leasetime, attr->value,
+			       sizeof(uint32_t));
 			break;
 		default:
 			debug("Ignoring invalid attribute for request_ip: %d\n",
@@ -348,6 +347,7 @@ static int allocate_from_pool(struct wg_dynamic_request *const req,
 
 static bool send_error(int fd, int ret)
 {
+	UNUSED(fd);
 	debug("Error: %s\n", strerror(ret));
 	return true;
 }
@@ -365,38 +365,34 @@ static void send_later(struct wg_dynamic_request *req, unsigned char *const buf,
 	req->buflen = msglen;
 }
 
-static size_t serialise_lease(char *buf, size_t bufsize, size_t offset,
-			      struct wg_combined_ip addrs[2], uint32_t expires)
+static int serialise_lease(char *buf, size_t bufsize, size_t *offset,
+			   uint32_t lease_start, const struct wg_lease *lease)
 {
 	char addrbuf[INET6_ADDRSTRLEN];
-	char *fmt;
-	size_t w;
 
-	w = 0;
-	for (int i = 0; i < 2; i++) {
-		switch (addrs[i].family) {
-		case AF_INET:
-			fmt = "ipv4=%s\n";
-			break;
-		case AF_INET6:
-			fmt = "ipv6=%s\n";
-			break;
-		default:
-			fatal("Invalid family: %d", addrs[i].family);
-		}
-
-		if (!inet_ntop(addrs[i].family, &addrs[i].ip.ip4, addrbuf,
+	if (lease->ip4.family) {
+		if (!inet_ntop(AF_INET, &lease->ip4.ip.ip4, addrbuf,
 			       sizeof addrbuf))
-			fatal("Failed inet_ntop");
-		w += printf_to_buf(buf, bufsize, offset, fmt, addrbuf);
-		offset += w;
+			return -1;
+		*offset += printf_to_buf(buf, bufsize, *offset, "ipv4=%s\n",
+					 addrbuf);
+	}
+	if (lease->ip6.family) {
+		if (!inet_ntop(AF_INET6, &lease->ip6.ip.ip6, addrbuf,
+			       sizeof addrbuf))
+			return -1;
+		*offset += printf_to_buf(buf, bufsize, *offset, "ipv6=%s\n",
+					 addrbuf);
 	}
 
-	if (w)
-		offset += printf_to_buf(buf, bufsize, offset, "leasetime=%u\n",
-					expires);
+	if (lease->ip4.family || lease->ip6.family) {
+		*offset += printf_to_buf(buf, bufsize, *offset, "start=%u\n",
+					 lease_start);
+		*offset += printf_to_buf(buf, bufsize, *offset,
+					 "leasetime=%u\n", lease->leasetime);
+	}
 
-	return offset;
+	return 0;
 }
 
 static bool send_response(int fd, struct wg_dynamic_request *req)
@@ -405,8 +401,8 @@ static bool send_response(int fd, struct wg_dynamic_request *req)
 	unsigned char buf[MAX_RESPONSE_SIZE + 1];
 	size_t msglen;
 	size_t written;
-	struct wg_combined_ip addrs[2] = { 0 };
-	uint32_t expires;
+	struct wg_lease lease = { 0 };
+	struct timespec tp;
 
 	printf("Recieved request of type %s.\n", WG_DYNAMIC_KEY[req->cmd]);
 	struct wg_dynamic_attr *cur = req->first;
@@ -422,13 +418,20 @@ static bool send_response(int fd, struct wg_dynamic_request *req)
 		msglen = printf_to_buf((char *)buf, sizeof buf, 0, "%s=%d\n",
 				       WG_DYNAMIC_KEY[req->cmd],
 				       WG_DYNAMIC_PROTOCOL_VERSION);
-		ret = allocate_from_pool(req, addrs, &expires);
+		ret = allocate_from_pool(req, &lease);
 		if (ret)
 			break;
-		msglen += serialise_lease((char *)buf, sizeof buf, msglen,
-					  addrs, expires);
+		if (clock_gettime(CLOCK_REALTIME, &tp)) {
+			ret = errno;
+			break;
+		}
+		if (serialise_lease((char *)buf, sizeof buf, &msglen, tp.tv_sec,
+				    &lease)) {
+			ret = EINVAL;
+			break;
+		}
 
-		/* TODO: inform wg about the new address (or maybe if (send_rather wait until after we've closed this tcp if (send_connection?)  */
+		/* TODO: add addresses to peer's allowed ip's */
 
 		break;
 	default:
@@ -439,7 +442,7 @@ static bool send_response(int fd, struct wg_dynamic_request *req)
 	msglen += printf_to_buf((char *)buf, sizeof buf, msglen, "errno=%d\n\n",
 				ret);
 	written = send_message(fd, buf, &msglen);
-	if (!msglen)
+	if (msglen == 0)
 		return true;
 
 	send_later(req, buf + written, msglen);

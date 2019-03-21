@@ -69,6 +69,12 @@ struct wg_combined_ip {
 	uint8_t cidr;
 };
 
+struct wg_lease {
+	struct wg_combined_ip ip4;
+	struct wg_combined_ip ip6;
+	uint32_t leasetime;
+};
+
 #define ARRAY_SIZE(arr) (sizeof(arr) / sizeof((arr)[0]))
 
 void free_wg_dynamic_request(struct wg_dynamic_request *req);
