@@ -559,9 +559,7 @@ int main(int argc, char *argv[])
 	inet_pton(AF_INET6, WG_DYNAMIC_ADDR, &well_known);
 
 	for (int i = 0; i < MAX_CONNECTIONS + 1; ++i) {
-		pollfds[i] = (struct pollfd){
-			.fd = -1, .events = POLLIN,
-		};
+		pollfds[i] = (struct pollfd){.fd = -1, .events = POLLIN };
 	}
 
 	if (argc != 2)
