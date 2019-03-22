@@ -306,7 +306,7 @@ static void close_connection(int *fd, struct wg_dynamic_request *req)
 }
 
 static int allocate_from_pool(struct wg_dynamic_request *const req,
-			      struct wg_lease *lease)
+			      struct wg_dynamic_lease *lease)
 {
 	struct wg_dynamic_attr *attr;
 
@@ -366,18 +366,19 @@ static void send_later(struct wg_dynamic_request *req, unsigned char *const buf,
 }
 
 static int serialise_lease(char *buf, size_t bufsize, size_t *offset,
-			   uint32_t lease_start, const struct wg_lease *lease)
+			   uint32_t lease_start,
+			   const struct wg_dynamic_lease *lease)
 {
 	char addrbuf[INET6_ADDRSTRLEN];
 
-	if (lease->ip4.family) {
+	if (lease->ip4.family) { /* FIXME: memcmp(&lease->ip4, 0, ...) instead? */
 		if (!inet_ntop(AF_INET, &lease->ip4.ip.ip4, addrbuf,
 			       sizeof addrbuf))
 			return -1;
 		*offset += printf_to_buf(buf, bufsize, *offset, "ipv4=%s\n",
 					 addrbuf);
 	}
-	if (lease->ip6.family) {
+	if (lease->ip6.family) { /* FIXME: memcmp(&lease->ip4, 0, ...) instead? */
 		if (!inet_ntop(AF_INET6, &lease->ip6.ip.ip6, addrbuf,
 			       sizeof addrbuf))
 			return -1;
@@ -395,14 +396,66 @@ static int serialise_lease(char *buf, size_t bufsize, size_t *offset,
 	return 0;
 }
 
+static struct wg_peer *current_peer(struct wg_dynamic_request *req)
+{
+	struct wg_peer *peer;
+
+	wg_for_each_peer (device, peer) {
+		if (!memcmp(peer->public_key, req->pubkey, sizeof(wg_key)))
+			return peer;
+	}
+
+	return NULL;
+}
+
+static void insert_allowed_ip(struct wg_peer *peer,
+			      const struct wg_combined_ip *ip)
+{
+	struct wg_allowedip *newip;
+
+	newip = calloc(1, sizeof(struct wg_allowedip));
+	if (!newip)
+		fatal("calloc()");
+
+	newip->family = ip->family;
+	switch (newip->family) {
+	case AF_INET:
+		memcpy(&newip->ip4, &ip->ip.ip4, sizeof(struct in_addr));
+		break;
+	case AF_INET6:
+		memcpy(&newip->ip6, &ip->ip.ip6, sizeof(struct in6_addr));
+		break;
+	}
+	newip->cidr = ip->cidr;
+
+	if (!peer->first_allowedip)
+		peer->first_allowedip = peer->last_allowedip = newip;
+	else {
+		peer->last_allowedip->next_allowedip = newip;
+		peer->last_allowedip = newip;
+	}
+}
+
+static int add_allowed_ips(struct wg_peer *peer,
+			   const struct wg_dynamic_lease *lease)
+{
+	if (lease->ip4.family)
+		insert_allowed_ip(peer, &lease->ip4);
+	if (lease->ip6.family)
+		insert_allowed_ip(peer, &lease->ip6);
+
+	return wg_set_device(device);
+}
+
 static bool send_response(int fd, struct wg_dynamic_request *req)
 {
 	int ret;
 	unsigned char buf[MAX_RESPONSE_SIZE + 1];
 	size_t msglen;
 	size_t written;
-	struct wg_lease lease = { 0 };
+	struct wg_dynamic_lease lease = { 0 };
 	struct timespec tp;
+	struct wg_peer *peer;
 
 	printf("Recieved request of type %s.\n", WG_DYNAMIC_KEY[req->cmd]);
 	struct wg_dynamic_attr *cur = req->first;
@@ -411,16 +464,28 @@ static bool send_response(int fd, struct wg_dynamic_request *req)
 		cur = cur->next;
 	}
 
+	peer = current_peer(req);
+	if (!peer)
+		die("Unable to find peer\n");
+
 	ret = EINVAL;
 	msglen = 0;
 	switch (req->cmd) {
 	case WGKEY_REQUEST_IP:
+
 		msglen = printf_to_buf((char *)buf, sizeof buf, 0, "%s=%d\n",
 				       WG_DYNAMIC_KEY[req->cmd],
 				       WG_DYNAMIC_PROTOCOL_VERSION);
 		ret = allocate_from_pool(req, &lease);
 		if (ret)
 			break;
+
+		ret = add_allowed_ips(peer, &lease);
+		if (ret) {
+			ret = -ret;
+			break;
+		}
+
 		if (clock_gettime(CLOCK_REALTIME, &tp)) {
 			ret = errno;
 			break;
@@ -430,8 +495,6 @@ static bool send_response(int fd, struct wg_dynamic_request *req)
 			ret = EINVAL;
 			break;
 		}
-
-		/* TODO: add addresses to peer's allowed ip's */
 
 		break;
 	default:
