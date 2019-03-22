@@ -374,14 +374,14 @@ static int serialise_lease(char *buf, size_t bufsize, size_t *offset,
 	if (lease->ip4.family) { /* FIXME: memcmp(&lease->ip4, 0, ...) instead? */
 		if (!inet_ntop(AF_INET, &lease->ip4.ip.ip4, addrbuf,
 			       sizeof addrbuf))
-			return -1;
+			fatal("inet_ntop");
 		*offset += printf_to_buf(buf, bufsize, *offset, "ipv4=%s\n",
 					 addrbuf);
 	}
 	if (lease->ip6.family) { /* FIXME: memcmp(&lease->ip4, 0, ...) instead? */
 		if (!inet_ntop(AF_INET6, &lease->ip6.ip.ip6, addrbuf,
 			       sizeof addrbuf))
-			return -1;
+			fatal("inet_ntop");
 		*offset += printf_to_buf(buf, bufsize, *offset, "ipv6=%s\n",
 					 addrbuf);
 	}
@@ -468,35 +468,38 @@ static bool send_response(int fd, struct wg_dynamic_request *req)
 	if (!peer)
 		die("Unable to find peer\n");
 
-	ret = EINVAL;
+	ret = 0;
 	msglen = 0;
 	switch (req->cmd) {
 	case WGKEY_REQUEST_IP:
-
 		msglen = printf_to_buf((char *)buf, sizeof buf, 0, "%s=%d\n",
 				       WG_DYNAMIC_KEY[req->cmd],
 				       WG_DYNAMIC_PROTOCOL_VERSION);
 		ret = allocate_from_pool(req, &lease);
-		if (ret)
+		if (ret) {
+			debug("IP address allocation failing with %d\n", ret);
+			ret = 1;
 			break;
+		}
 
 		ret = add_allowed_ips(peer, &lease);
 		if (ret) {
-			ret = -ret;
+			debug("Unable to add allocated addresses to peer: %s\n",
+			      strerror(-ret));
+			ret = 1;
 			break;
 		}
 
 		if (clock_gettime(CLOCK_REALTIME, &tp)) {
-			ret = errno;
-			break;
-		}
-		if (serialise_lease((char *)buf, sizeof buf, &msglen, tp.tv_sec,
-				    &lease)) {
-			ret = EINVAL;
+			fatal("clock_gettime(CLOCK_REALTIME)");
 			break;
 		}
 
+		serialise_lease((char *)buf, sizeof buf, &msglen, tp.tv_sec,
+				&lease);
+
 		break;
+
 	default:
 		debug("Unknown command: %d\n", req->cmd);
 		return true;
