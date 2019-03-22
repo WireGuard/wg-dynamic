@@ -601,7 +601,6 @@ int main(int argc, char *argv[])
 			if (send_message(pollfds[i].fd, reqs[i - 1].buf,
 					 &reqs[i - 1].buflen)) {
 				close_connection(&pollfds[i].fd, &reqs[i - 1]);
-				pollfds[i].events &= ~POLLOUT;
 				continue;
 			}
 		}
