@@ -607,7 +607,7 @@ int main(int argc, char *argv[])
 		}
 
 		for (int i = 1; i < MAX_CONNECTIONS + 1; ++i) {
-			if (!(pollfds[i].revents & POLLIN))
+			if (pollfds[i].fd < 0 || !pollfds[i].revents & POLLIN))
 				continue;
 
 			pollfds[i].revents &= ~POLLIN;
