@@ -84,4 +84,5 @@ bool handle_request(int fd, struct wg_dynamic_request *req,
 		    bool (*error)(int, int));
 size_t send_message(int fd, unsigned char *buf, size_t *len);
 size_t printf_to_buf(char *buf, size_t bufsize, size_t len, char *fmt, ...);
+uint32_t now();
 #endif

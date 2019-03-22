@@ -308,7 +308,6 @@ static void close_connection(int *fd, struct wg_dynamic_request *req)
 static int allocate_from_pool(struct wg_dynamic_request *const req,
 			      struct wg_dynamic_lease *lease)
 {
-	struct timespec tp;
 	struct wg_dynamic_attr *attr;
 
 	/* NOTE: "allocating" whatever client asks for */
@@ -318,9 +317,7 @@ static int allocate_from_pool(struct wg_dynamic_request *const req,
 	 * to the wg interface, and kept up to date as the routing
 	 * table changes */
 
-	if (clock_gettime(CLOCK_REALTIME, &tp))
-		fatal("clock_gettime(CLOCK_REALTIME)");
-	lease->starttime = tp.tv_sec;
+	lease->starttime = now();
 	lease->leasetime = WG_DYNAMIC_LEASETIME;
 
 	attr = req->first;

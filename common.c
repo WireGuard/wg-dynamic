@@ -324,3 +324,12 @@ size_t printf_to_buf(char *buf, size_t bufsize, size_t offset, char *fmt, ...)
 		fatal("Outbuffer too small");
 	return n;
 }
+
+uint32_t now()
+{
+	struct timespec tp;
+	if (clock_gettime(CLOCK_REALTIME, &tp))
+		fatal("clock_gettime(CLOCK_REALTIME)");
+	return tp.tv_sec;
+}
+
