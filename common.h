@@ -72,6 +72,7 @@ struct wg_combined_ip {
 struct wg_dynamic_lease {
 	struct wg_combined_ip ip4;
 	struct wg_combined_ip ip6;
+	uint32_t starttime;
 	uint32_t leasetime;
 };
 

@@ -308,6 +308,7 @@ static void close_connection(int *fd, struct wg_dynamic_request *req)
 static int allocate_from_pool(struct wg_dynamic_request *const req,
 			      struct wg_dynamic_lease *lease)
 {
+	struct timespec tp;
 	struct wg_dynamic_attr *attr;
 
 	/* NOTE: "allocating" whatever client asks for */
@@ -317,6 +318,9 @@ static int allocate_from_pool(struct wg_dynamic_request *const req,
 	 * to the wg interface, and kept up to date as the routing
 	 * table changes */
 
+	if (clock_gettime(CLOCK_REALTIME, &tp))
+		fatal("clock_gettime(CLOCK_REALTIME)");
+	lease->starttime = tp.tv_sec;
 	lease->leasetime = WG_DYNAMIC_LEASETIME;
 
 	attr = req->first;
@@ -366,7 +370,6 @@ static void send_later(struct wg_dynamic_request *req, unsigned char *const buf,
 }
 
 static int serialise_lease(char *buf, size_t bufsize, size_t *offset,
-			   uint32_t lease_start,
 			   const struct wg_dynamic_lease *lease)
 {
 	char addrbuf[INET6_ADDRSTRLEN];
@@ -388,7 +391,7 @@ static int serialise_lease(char *buf, size_t bufsize, size_t *offset,
 
 	if (lease->ip4.family || lease->ip6.family) {
 		*offset += printf_to_buf(buf, bufsize, *offset, "start=%u\n",
-					 lease_start);
+					 lease->starttime);
 		*offset += printf_to_buf(buf, bufsize, *offset,
 					 "leasetime=%u\n", lease->leasetime);
 	}
@@ -454,7 +457,6 @@ static bool send_response(int fd, struct wg_dynamic_request *req)
 	size_t msglen;
 	size_t written;
 	struct wg_dynamic_lease lease = { 0 };
-	struct timespec tp;
 	struct wg_peer *peer;
 
 	printf("Recieved request of type %s.\n", WG_DYNAMIC_KEY[req->cmd]);
@@ -490,13 +492,7 @@ static bool send_response(int fd, struct wg_dynamic_request *req)
 			break;
 		}
 
-		if (clock_gettime(CLOCK_REALTIME, &tp)) {
-			fatal("clock_gettime(CLOCK_REALTIME)");
-			break;
-		}
-
-		serialise_lease((char *)buf, sizeof buf, &msglen, tp.tv_sec,
-				&lease);
+		serialise_lease((char *)buf, sizeof buf, &msglen, &lease);
 
 		break;
 
