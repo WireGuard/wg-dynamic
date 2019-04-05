@@ -499,7 +499,7 @@ int main(int argc __attribute__((unused)), char *argv[] __attribute__((unused)))
 					  &our_gaddr4, &our_gaddr6))
 		die("%s needs to have an IPv6 link local address with prefixlen 128 assigned\n",
 		    wg_interface);
-	// TODO: verify that we have a peer matching the requirements (fe80::/128)?
+	// TODO: verify that we have a peer that includes fe80::/128
 
 	char lladr_str[INET6_ADDRSTRLEN];
 	debug("%s: %s\n", wg_interface,
