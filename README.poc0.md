@@ -10,6 +10,7 @@ and all of the interfaces for interacting with wg-dynamic may change.
 
 Download and build
 
+    sudo apt install libmnl0 libmnl-dev
     git clone -b ln/poc0 https://git.zx2c4.com/wg-dynamic
     cd wg-dynamic
     make
@@ -18,11 +19,11 @@ Download and build
 
 Configure server side wg0 to have fe80::/64:
 
-    ip addr add fe80::/64 dev wg0
+    sudo ip addr add fe80::/64 dev wg0
 
 Start wg-dynamic-server:
 
-    ./wg-dynamic-server wg0
+    sudo ./wg-dynamic-server wg0
 
 # Running a client on wg0
 
@@ -32,12 +33,12 @@ IP-NETNS(8) and tests/netsh.sh.
 Configure client side wg0 to have an address with prefix length 128 in
 fe80::/64 and make sure that the server can be reached. Example:
 
-    ip addr add fe80::badc:ffe:e0dd:f00d/128 dev wg0
-    ip route add fe80::/128 dev wg0
+    sudo ip addr add fe80::badc:ffe:e0dd:f00d/128 dev wg0
+    sudo ip route add fe80::/128 dev wg0
 
 Start wg-dynamic-client:
 
-    ./wg-dynamic-client wg0
+    sudo ./wg-dynamic-client wg0
 
 # Known limitations
 
