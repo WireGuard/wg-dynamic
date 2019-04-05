@@ -26,7 +26,6 @@ static const uint16_t WG_DYNAMIC_PORT = 1337;
 
 #define WG_DYNAMIC_LEASETIME 10 /* NOTE: 10s is good for testing purposes */
 
-/* TODO: Move client specific items to its own CLIENT_ITEMS */
 #define ITEMS                                                                  \
 	E(WGKEY_UNKNOWN, "") /* must be the first entry */                     \
 	/* CMD START */                                                        \
