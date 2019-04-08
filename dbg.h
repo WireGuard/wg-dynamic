@@ -29,9 +29,8 @@ extern int DBG_LVL;
 #define SUFFIX(S, M, ...) M S, __VA_ARGS__
 
 #define log_err(...) fprintf(stderr, PREFIX(__VA_ARGS__))
-/* FIXME: This looks backwards -- DBG_LVL=2 gives info but not warn. */
-#define log_warn(...) do { if (DBG_LVL > 2) log_err(__VA_ARGS__); } while (0)
-#define log_info(...) do { if (DBG_LVL > 1) log_err(__VA_ARGS__); } while (0)
+#define log_warn(...) do { if (DBG_LVL > 1) log_err(__VA_ARGS__); } while (0)
+#define log_info(...) do { if (DBG_LVL > 2) log_err(__VA_ARGS__); } while (0)
 #define die(...)                                                               \
 	do {                                                                   \
 		log_err(__VA_ARGS__);                                          \
