@@ -20,7 +20,6 @@
 #include "netlink.h"
 
 #define LEASE_CHECK_INTERVAL 1000 /* 1s is convenient for testing */
-#define LOW_PORT_START 214
 
 int DBG_LVL = 3;
 
@@ -200,6 +199,7 @@ static int do_connect(int *fd)
 	struct sockaddr_in6 our_addr = {
 		.sin6_family = AF_INET6,
 		.sin6_addr = our_lladdr,
+		.sin6_port = htons(WG_DYNAMIC_PORT),
 		.sin6_scope_id = device->ifindex,
 	};
 	struct sockaddr_in6 their_addr = {
@@ -212,15 +212,8 @@ static int do_connect(int *fd)
 	if (*fd < 0)
 		fatal("Creating a socket failed");
 
-	for (int port = LOW_PORT_START;; port++) {
-		our_addr.sin6_port = htons(port);
-		if (!bind(*fd, (struct sockaddr *)&our_addr, sizeof(our_addr)))
-			break;
-		if (errno != EADDRINUSE)
-			fatal("Binding socket failed");
-		if (port >= 1024)
-			die("No low ports available");
-	}
+	if (bind(*fd, (struct sockaddr *)&our_addr, sizeof(our_addr)))
+		fatal("Binding socket failed");
 
 	if (!inet_pton(AF_INET6, WG_DYNAMIC_ADDR, &their_addr.sin6_addr))
 		fatal("inet_pton()");

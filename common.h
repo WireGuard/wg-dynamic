@@ -22,7 +22,7 @@
 #define MAX_RESPONSE_SIZE 8192
 
 static const char WG_DYNAMIC_ADDR[] = "fe80::";
-static const uint16_t WG_DYNAMIC_PORT = 1337;
+static const uint16_t WG_DYNAMIC_PORT = 970;
 
 #define WG_DYNAMIC_LEASETIME 10 /* NOTE: 10s is good for testing purposes */
 
