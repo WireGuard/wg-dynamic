@@ -83,4 +83,8 @@ n1 ping6 -c 10 -f -W 1 fe80::badc:0ffe:e0dd:f00d%wg0
 
 pp echo "PID: $$"
 
-n1 ./wg-dynamic-server wg0
+if [ -z "$NETSH_GDB" ]; then
+    n1 ./wg-dynamic-server wg0
+else			     # Try NETSH_GDB="-ex run" tests./netsh.sh
+    n1 gdb $NETSH_GDB --args ./wg-dynamic-server wg0
+fi
