@@ -278,12 +278,10 @@ static int allocate_from_pool(struct wg_dynamic_request *const req,
 	while (attr) {
 		switch (attr->key) {
 		case WGKEY_IPV4:
-			break; /* FIXME */
 			memcpy(&lease->ip4, attr->value,
 			       sizeof(struct wg_combined_ip));
 			break;
 		case WGKEY_IPV6:
-			break; /* FIXME */
 			memcpy(&lease->ip6, attr->value,
 			       sizeof(struct wg_combined_ip));
 			break;
