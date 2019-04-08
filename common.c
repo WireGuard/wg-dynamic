@@ -50,9 +50,7 @@ static struct wg_dynamic_attr *parse_value(enum wg_dynamic_key key, char *value)
 	char *endptr;
 	uintmax_t uresult;
 	union {
-		uint32_t leasetime;
-		uint32_t leasestart;
-		uint32_t err;
+		uint32_t uint32;
 		char errmsg[72];
 		struct wg_combined_ip ip;
 	} data = { 0 };
@@ -73,28 +71,28 @@ static struct wg_dynamic_attr *parse_value(enum wg_dynamic_key key, char *value)
 
 		break;
 	case WGKEY_LEASESTART:
-		len = sizeof data.leasestart;
+		len = sizeof data.uint32;
 		uresult = strtoumax(value, &endptr, 10);
 		if (uresult > UINT32_MAX || *endptr != '\0')
 			return NULL;
 
-		data.leasestart = (uint32_t)uresult;
+		data.uint32 = (uint32_t)uresult;
 		break;
 	case WGKEY_LEASETIME:
-		len = sizeof data.leasetime;
+		len = sizeof data.uint32;
 		uresult = strtoumax(value, &endptr, 10);
 		if (uresult > UINT32_MAX || *endptr != '\0')
 			return NULL;
 
-		data.leasetime = (uint32_t)uresult;
+		data.uint32 = (uint32_t)uresult;
 		break;
 	case WGKEY_ERRNO:
-		len = sizeof data.err;
+		len = sizeof data.uint32;
 		uresult = strtoumax(value, &endptr, 10);
 		if (uresult > UINT32_MAX || *endptr != '\0')
 			return NULL;
 
-		data.err = (uint32_t)uresult;
+		data.uint32 = (uint32_t)uresult;
 		break;
 	case WGKEY_ERRMSG:
 		strncpy(data.errmsg, value, sizeof data.errmsg);
