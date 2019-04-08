@@ -55,7 +55,7 @@ client_public=$(wg pubkey <<< $client_private)
 
 configure_peers() {
 	ip1 addr add fe80::/64 dev wg0
-	ip2 addr add fe80::badc:0ffe:e0dd:f00d/64 dev wg0
+	ip2 addr add fe80::badc:0ffe:e0dd:f00d/128 dev wg0
 
 	n1 wg set wg0 \
 		private-key <(echo $server_private) \
@@ -71,6 +71,8 @@ configure_peers() {
 
 	ip1 link set up dev wg0
 	ip2 link set up dev wg0
+
+	ip2 route add fe80::/128 dev wg0
 }
 configure_peers
 
