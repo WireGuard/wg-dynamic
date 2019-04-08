@@ -47,27 +47,6 @@ static void usage()
 	die("usage: %s <wg-interface>\n", progname);
 }
 
-static int data_attr_cb(const struct nlattr *attr, void *data)
-{
-	const struct nlattr **tb = data;
-	int type = mnl_attr_get_type(attr);
-
-	/* skip unsupported attribute in user-space */
-	if (mnl_attr_type_valid(attr, IFA_MAX) < 0)
-		return MNL_CB_OK;
-
-	switch (type) {
-	case IFA_ADDRESS:
-		if (mnl_attr_validate(attr, MNL_TYPE_BINARY) < 0) {
-			perror("mnl_attr_validate");
-			return MNL_CB_ERROR;
-		}
-		break;
-	}
-	tb[type] = attr;
-	return MNL_CB_OK;
-}
-
 static int data_cb(const struct nlmsghdr *nlh, void *data)
 {
 	struct nlattr *tb[IFA_MAX + 1] = {};

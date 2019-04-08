@@ -352,7 +352,7 @@ void send_later(struct wg_dynamic_request *req, unsigned char *const buf,
 	req->buflen = msglen;
 }
 
-size_t print_to_buf(char *buf, size_t bufsize, size_t offset, char *fmt, ...)
+int print_to_buf(char *buf, size_t bufsize, size_t offset, char *fmt, ...)
 {
 	va_list ap;
 	va_start(ap, fmt);
@@ -361,7 +361,7 @@ size_t print_to_buf(char *buf, size_t bufsize, size_t offset, char *fmt, ...)
 	if (n < 0)
 		fatal("Failed snprintf");
 	if (n + offset >= bufsize)
-		fatal("Outbuffer too small");
+		die("Outbuffer too small");
 	return n;
 }
 
@@ -432,4 +432,25 @@ void iface_get_all_addrs(uint8_t family, mnl_cb_t data_cb, void *cb_data)
 		fatal("mnl_cb_run/mnl_socket_recvfrom");
 
 	mnl_socket_close(nl);
+}
+
+int data_attr_cb(const struct nlattr *attr, void *data)
+{
+	const struct nlattr **tb = data;
+	int type = mnl_attr_get_type(attr);
+
+	/* skip unsupported attribute in user-space */
+	if (mnl_attr_type_valid(attr, IFA_MAX) < 0)
+		return MNL_CB_OK;
+
+	switch (type) {
+	case IFA_ADDRESS:
+		if (mnl_attr_validate(attr, MNL_TYPE_BINARY) < 0) {
+			perror("mnl_attr_validate");
+			return MNL_CB_ERROR;
+		}
+		break;
+	}
+	tb[type] = attr;
+	return MNL_CB_OK;
 }

@@ -90,9 +90,10 @@ bool handle_request(int fd, struct wg_dynamic_request *req,
 size_t send_message(int fd, unsigned char *buf, size_t *len);
 void send_later(struct wg_dynamic_request *req, unsigned char *const buf,
 		size_t msglen);
-size_t print_to_buf(char *buf, size_t bufsize, size_t len, char *fmt, ...);
+int print_to_buf(char *buf, size_t bufsize, size_t len, char *fmt, ...);
 uint32_t current_time();
 void close_connection(int *fd, struct wg_dynamic_request *req);
 bool is_link_local(unsigned char *addr);
 void iface_get_all_addrs(uint8_t family, mnl_cb_t data_cb, void *cb_data);
+int data_attr_cb(const struct nlattr *attr, void *data);
 #endif
