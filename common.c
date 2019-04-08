@@ -382,7 +382,7 @@ void close_connection(int *fd, struct wg_dynamic_request *req)
 
 bool is_link_local(unsigned char *addr)
 {
-	/* TODO: check if the remaining 48 bits are 0 */
+	/* TODO: check if the remaining 54 bits are 0 */
 	return IN6_IS_ADDR_LINKLOCAL(addr);
 }
 
