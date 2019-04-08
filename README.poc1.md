@@ -1,6 +1,6 @@
-# wg-dynamic poc0 warning
+# wg-dynamic poc1 warning
 
-wg-dynamic ln/poc0 is unreleased code. It has not been reviewed. It's
+wg-dynamic ln/poc1 is unreleased code. It has not been reviewed. It's
 full of bugs.
 
 This code is meant for very early integration testing. Beware that any
@@ -11,7 +11,7 @@ and all of the interfaces for interacting with wg-dynamic may change.
 Download and build
 
     sudo apt install libmnl0 libmnl-dev
-    git clone -b ln/poc0 https://git.zx2c4.com/wg-dynamic
+    git clone -b ln/poc1 https://git.zx2c4.com/wg-dynamic
     cd wg-dynamic
     make
 
