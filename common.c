@@ -71,33 +71,20 @@ static struct wg_dynamic_attr *parse_value(enum wg_dynamic_key key, char *value)
 
 		break;
 	case WGKEY_LEASESTART:
-		len = sizeof data.uint32;
-		uresult = strtoumax(value, &endptr, 10);
-		if (uresult > UINT32_MAX || *endptr != '\0')
-			return NULL;
-
-		data.uint32 = (uint32_t)uresult;
-		break;
 	case WGKEY_LEASETIME:
-		len = sizeof data.uint32;
-		uresult = strtoumax(value, &endptr, 10);
-		if (uresult > UINT32_MAX || *endptr != '\0')
-			return NULL;
-
-		data.uint32 = (uint32_t)uresult;
-		break;
 	case WGKEY_ERRNO:
 		len = sizeof data.uint32;
 		uresult = strtoumax(value, &endptr, 10);
 		if (uresult > UINT32_MAX || *endptr != '\0')
 			return NULL;
-
 		data.uint32 = (uint32_t)uresult;
+
 		break;
 	case WGKEY_ERRMSG:
 		strncpy(data.errmsg, value, sizeof data.errmsg);
 		len = MIN(sizeof data.errmsg,
 			  strlen(value) + 1); /* Copying the NUL byte too. */
+
 		break;
 	default:
 		debug("Invalid key %d, aborting\n", key);
