@@ -51,5 +51,6 @@ interface.
 ## Protocol
 
 Example:
-client -> server: request_ip=1\n\n
-server -> client: request_ip=1\nipv4=192.168.47.11/32\n\n
+
+    client -> server: request_ip=1\n\n
+    server -> client: request_ip=1\nipv4=192.168.47.11/32\nipv6=fd00::4711/128\nleasestart=1555074514\nleasetime=3600\nerrno=0\n\n
