@@ -26,6 +26,12 @@ int radix_tryinsert_v4(struct radix_trie *root, const struct in_addr *ip,
 		       uint8_t cidr, void *data);
 int radix_tryinsert_v6(struct radix_trie *root, const struct in6_addr *ip,
 		       uint8_t cidr, void *data);
+int radix_addpool_v4(struct radix_trie *root, const struct in_addr *ip,
+		     uint8_t cidr);
+int radix_addpool_v6(struct radix_trie *root, const struct in6_addr *ip,
+		     uint8_t cidr);
+void radix_addnth_v4(uint64_t n, void *data, struct in_addr *dest);
+void radix_addnth_v6(uint64_t n, void *data, struct in6_addr *dest);
 
 #ifdef DEBUG
 void node_to_str(struct radix_node *node, char *buf, uint8_t bits);
