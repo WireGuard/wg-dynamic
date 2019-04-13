@@ -245,25 +245,32 @@ static struct radix_node *lookup(struct radix_node *root, uint8_t bits,
 
 #ifdef DEBUG
 #include <stdio.h>
-void node_to_str(struct radix_node *node, char *buf)
+void node_to_str(struct radix_node *node, char *buf, uint8_t bits)
 {
-	struct in6_addr addr;
 	char out[INET6_ADDRSTRLEN];
 	char cidr[5];
+	struct in_addr v4addr;
+	struct in6_addr v6addr;
 
 	if (!node) {
 		strcpy(buf, "-");
 		return;
 	}
 
-	swap_endian(addr.s6_addr, node->bits, 128);
-	inet_ntop(AF_INET6, &addr, out, sizeof out);
+	if (bits == 32) {
+		swap_endian((uint8_t *)&v4addr.s_addr, node->bits, bits);
+		inet_ntop(AF_INET, &v4addr, out, sizeof out);
+	} else {
+		swap_endian(v6addr.s6_addr, node->bits, bits);
+		inet_ntop(AF_INET6, &v6addr, out, sizeof out);
+	}
+
 	snprintf(cidr, sizeof cidr, "/%u", node->cidr);
 	strcpy(buf, out);
 	strcat(buf, cidr);
 }
 
-void debug_print_trie(struct radix_node *root)
+static void debug_print_trie(struct radix_node *root, uint8_t bits)
 {
 	char parent[INET6_ADDRSTRLEN + 4], child1[INET6_ADDRSTRLEN + 4],
 		child2[INET6_ADDRSTRLEN + 4];
@@ -271,14 +278,24 @@ void debug_print_trie(struct radix_node *root)
 	if (!root)
 		return;
 
-	node_to_str(root, parent);
-	node_to_str(root->bit[0], child1);
-	node_to_str(root->bit[1], child2);
+	node_to_str(root, parent, bits);
+	node_to_str(root->bit[0], child1, bits);
+	node_to_str(root->bit[1], child2, bits);
 
 	debug("%s -> %s, %s\n", parent, child1, child2);
 
-	debug_print_trie(root->bit[0]);
-	debug_print_trie(root->bit[1]);
+	debug_print_trie(root->bit[0], bits);
+	debug_print_trie(root->bit[1], bits);
+}
+
+void debug_print_trie_v4(struct radix_trie *trie)
+{
+	debug_print_trie(trie->ip4_root, 32);
+}
+
+void debug_print_trie_v6(struct radix_trie *trie)
+{
+	debug_print_trie(trie->ip6_root, 128);
 }
 #endif
 

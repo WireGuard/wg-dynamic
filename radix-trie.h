@@ -28,8 +28,9 @@ int radix_tryinsert_v6(struct radix_trie *root, const struct in6_addr *ip,
 		       uint8_t cidr, void *data);
 
 #ifdef DEBUG
-void node_to_str(struct radix_node *node, char *buf);
-void debug_print_trie(struct radix_node *root);
+void node_to_str(struct radix_node *node, char *buf, uint8_t bits);
+void debug_print_trie_v4(struct radix_trie *trie);
+void debug_print_trie_v6(struct radix_trie *trie);
 #endif
 
 #endif
