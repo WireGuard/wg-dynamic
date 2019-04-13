@@ -25,22 +25,22 @@ struct radix_node {
 	uint8_t cidr, bit_at_a, bit_at_b;
 };
 
-// TODO: sort out #ifdef business to make this portable
-static unsigned int fls64(uint64_t a)
+static unsigned int fls64(uint64_t x)
 {
-	return __builtin_ctzl(a) + 1;
+	return x ? sizeof(unsigned long long) * 8 - __builtin_clzll(x) : 0;
 }
 
-static unsigned int fls(uint32_t a)
+static unsigned int fls(uint32_t x)
 {
-	return __builtin_ctz(a) + 1;
+	return x ? sizeof(unsigned long) * 8 - __builtin_clzl(x) : 0;
 }
 
 static unsigned int fls128(uint64_t a, uint64_t b)
 {
-	return a ? fls64(a) + 64U : (b ? fls64(b) : 0);
+	return a ? fls64(a) + 64U : fls64(b);
 }
 
+/* TODO: portable implementations */
 static void swap_endian(uint8_t *dst, const uint8_t *src, uint8_t bits)
 {
 	if (bits == 32) {
