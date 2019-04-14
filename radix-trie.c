@@ -293,15 +293,15 @@ void radix_free(struct radix_trie *trie)
 	radix_free_nodes(trie->ip6_root);
 }
 
-void *radix_find_v4(struct radix_trie *trie, uint8_t bits, const void *be_ip)
+void *radix_find_v4(struct radix_trie *trie, const void *be_ip)
 {
-	struct radix_node *found = lookup(trie->ip4_root, bits, be_ip);
+	struct radix_node *found = lookup(trie->ip4_root, 32, be_ip);
 	return found ? found->data : NULL;
 }
 
-void *radix_find_v6(struct radix_trie *trie, uint8_t bits, const void *be_ip)
+void *radix_find_v6(struct radix_trie *trie, const void *be_ip)
 {
-	struct radix_node *found = lookup(trie->ip6_root, bits, be_ip);
+	struct radix_node *found = lookup(trie->ip6_root, 128, be_ip);
 	return found ? found->data : NULL;
 }
 
