@@ -20,6 +20,27 @@ but is instead assigned an address by random.
 
 TODO: lease time
 
+### Data and state
+
+- lease: 0..*
+
+  - data:
+    - ipv4-address [in_addr, cidr]
+    - ipv6-address [in6_addr, cidr]
+    - expires-at [integer]
+    - allocated-to [peer]
+
+  - states and possible transitions:
+    - created -> deleted
+    - deleted -> created
+
+  - triggers:
+    - request-from-client:
+      - state=created
+    - now > expires-at:
+      - state=deleted
+
+
 ## Client
 
 The wg-dynamic client is a daemon responsible for requesting IP
@@ -47,6 +68,29 @@ valid for 15 seconds.
 Addresses received in a lease are being added to the wg
 interface. Addresses in an expired lease are being removed from the wg
 interface.
+
+### Data and state
+
+- lease: 1
+
+  - data:
+    - ipv4-address [in_addr, cidr]
+    - ipv6-address [in6_addr, cidr]
+    - start-time [integer]
+    - lease-time [integer]
+
+  - states and possible transitions:
+    - valid -> valid-expiring, invalid
+    - valid-expiring -> valid, invalid
+    - invalid -> valid
+
+  - triggers:
+    - lease-from-server
+      - state=valid
+    - less than 2/3 of lease-time left:
+      - state=valid-expiring
+    - now > start-time + lease_time:
+      - state=invalid
 
 ## Protocol
 
