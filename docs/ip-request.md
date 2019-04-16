@@ -31,14 +31,20 @@ TODO: lease time
     - allocated-to [peer]
 
   - states and possible transitions:
-    - created -> deleted
-    - deleted -> created
+    - CREATED -> DELETED
+    - DELETED -> CREATED
 
   - triggers:
-    - request-from-client:
-      - state=created
-    - now > expires-at:
-      - state=deleted
+    - request: incoming ip_request from client
+    - expired: now > expires-at
+
+  - state transitions
+    - <NEW>:
+      - request -> CREATED
+    - CREATED:
+      - expired -> DELETED
+    - DELETED:
+      - <delete>
 
 
 ## Client
@@ -80,17 +86,25 @@ interface.
     - lease-time [integer]
 
   - states and possible transitions:
-    - valid -> valid-expiring, invalid
-    - valid-expiring -> valid, invalid
-    - invalid -> valid
+    - VALID          -> VALID-EXPIRING, INVALID
+    - VALID-EXPIRING -> VALID, INVALID
+    - INVALID        -> VALID
 
   - triggers:
-    - lease-from-server
-      - state=valid
-    - less than 2/3 of lease-time left:
-      - state=valid-expiring
-    - now > start-time + lease_time:
-      - state=invalid
+    - got-lease: valid request_ip response
+    - aging: less than 2/3 of lease-time left
+    - aged: now > start-time + lease_time
+
+  - state transitions:
+    - VALID:
+      - aging -> VALID-EXPIRING
+      - aged -> INVALID
+    - VALID-EXPIRING:
+      - got-lease -> VALID
+      - aged -> INVALID
+    - INVALID:
+      - got-lease -> VALID
+
 
 ## Protocol
 
