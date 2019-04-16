@@ -31,15 +31,16 @@ TODO: lease time
     - allocated-to [peer]
 
   - states and possible transitions:
+    - <new>   -> CREATED
     - CREATED -> DELETED
-    - DELETED -> CREATED
+    - DELETED -> <delete>
 
   - triggers:
     - request: incoming ip_request from client
     - expired: now > expires-at
 
   - state transitions
-    - <NEW>:
+    - <new>:
       - request -> CREATED
     - CREATED:
       - expired -> DELETED
