@@ -24,16 +24,18 @@
 
 #include "common.h"
 #include "dbg.h"
+#include "khash.h"
 #include "netlink.h"
-#include "radix-trie.h"
 
 static const char *progname;
 static const char *wg_interface;
 static struct in6_addr well_known;
 
 static wg_device *device = NULL;
-static struct radix_trie allowedips_trie;
 static struct pollfd pollfds[MAX_CONNECTIONS + 1];
+
+KHASH_MAP_INIT_INT64(allowedht, wg_key *)
+khash_t(allowedht) * allowedips_ht;
 
 struct mnl_cb_data {
 	uint32_t ifindex;
@@ -125,13 +127,15 @@ static int get_avail_pollfds()
 	}
 }
 
-static void rebuild_allowedips_trie()
+static void rebuild_allowedips_ht()
 {
-	int ret;
 	wg_peer *peer;
 	wg_allowedip *allowedip;
+	khiter_t k;
+	uint64_t lh;
+	int ret;
 
-	radix_free(&allowedips_trie);
+	kh_clear(allowedht, allowedips_ht);
 
 	wg_free_device(device);
 	if (wg_get_device(&device, wg_interface))
@@ -139,35 +143,34 @@ static void rebuild_allowedips_trie()
 
 	wg_for_each_peer (device, peer) {
 		wg_for_each_allowedip (peer, allowedip) {
-			if (allowedip->family == AF_INET)
-				ret = radix_insert_v4(&allowedips_trie,
-						      &allowedip->ip4,
-						      allowedip->cidr, peer);
-			else
-				ret = radix_insert_v6(&allowedips_trie,
-						      &allowedip->ip6,
-						      allowedip->cidr, peer);
-			if (ret)
-				die("Failed to rebuild allowedips trie\n");
+			if (allowedip->family == AF_INET6 &&
+			    is_link_local(allowedip->ip6.s6_addr) &&
+			    allowedip->cidr == 128) {
+				memcpy(&lh, allowedip->ip6.s6_addr + 8, 8);
+				k = kh_put(allowedht, allowedips_ht, lh, &ret);
+				if (ret <= 0)
+					die("Failed to rebuild allowedips hashtable\n");
+
+				kh_value(allowedips_ht, k) = &peer->public_key;
+			}
 		}
 	}
 }
 
 static wg_key *addr_to_pubkey(struct sockaddr_storage *addr)
 {
-	wg_peer *peer;
+	khiter_t k;
+	uint64_t lh;
 
-	if (addr->ss_family == AF_INET)
-		peer = radix_find_v4(&allowedips_trie, 32,
-				     &((struct sockaddr_in *)addr)->sin_addr);
-	else
-		peer = radix_find_v6(&allowedips_trie, 128,
-				     &((struct sockaddr_in6 *)addr)->sin6_addr);
+	if (addr->ss_family == AF_INET6) {
+		lh = *(uint64_t *)&((struct sockaddr_in6 *)addr)
+			      ->sin6_addr.s6_addr[8];
+		k = kh_get(allowedht, allowedips_ht, lh);
+		if (k != kh_end(allowedips_ht))
+			return kh_val(allowedips_ht, k);
+	}
 
-	if (!peer)
-		return NULL;
-
-	return &peer->public_key;
+	return NULL;
 }
 
 static int accept_connection(int sockfd, wg_key *dest)
@@ -206,7 +209,7 @@ static int accept_connection(int sockfd, wg_key *dest)
 	pubkey = addr_to_pubkey(&addr);
 	if (!pubkey) {
 		/* our copy of allowedips is outdated, refresh */
-		rebuild_allowedips_trie();
+		rebuild_allowedips_ht();
 		pubkey = addr_to_pubkey(&addr);
 		if (!pubkey) {
 			/* either we lost the race or something is very wrong */
@@ -483,7 +486,7 @@ static void setup_socket(int *fd)
 
 static void cleanup()
 {
-	radix_free(&allowedips_trie);
+	kh_destroy(allowedht, allowedips_ht);
 	wg_free_device(device);
 
 	for (int i = 0; i < MAX_CONNECTIONS + 1; ++i) {
@@ -514,13 +517,13 @@ int main(int argc, char *argv[])
 	if (argc != 2)
 		usage();
 
-	radix_init(&allowedips_trie);
+	allowedips_ht = kh_init(allowedht);
 
 	wg_interface = argv[1];
 	if (atexit(cleanup))
 		die("Failed to set exit function\n");
 
-	rebuild_allowedips_trie();
+	rebuild_allowedips_ht();
 
 	if (!validate_link_local_ip(device->ifindex))
 		// TODO: assign IP instead?
