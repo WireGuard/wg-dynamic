@@ -624,4 +624,25 @@ typedef const char *kh_cstr_t;
 #define KHASH_MAP_INIT_STR(name, khval_t)								\
 	KHASH_INIT(name, kh_cstr_t, khval_t, 1, kh_str_hash_func, kh_str_hash_equal)
 
+/* Custom functions for wg_key (32 bytes) */
+typedef const unsigned char *khwgkey_t;
+
+#define kh_wgkey_hash_equal(a, b) (memcmp(a, b, 32) == 0)
+
+static kh_inline khint_t __fnv_1a_32_hash(const unsigned char *wgkey)
+{
+	khint_t hash = 0x811c9dc5UL;
+	for (int i = 0; i < 32; ++i) {
+		hash ^= wgkey[i];
+		hash *= 16777619UL;
+	}
+	return hash;
+}
+
+#define KHASH_SET_INIT_WGKEY(name)										\
+	KHASH_INIT(name, khwgkey_t, char, 0, __fnv_1a_32_hash, kh_wgkey_hash_equal)
+
+#define KHASH_MAP_INIT_WGKEY(name, khval_t)								\
+	KHASH_INIT(name, khwgkey_t, khval_t, 1, __fnv_1a_32_hash, kh_wgkey_hash_equal)
+
 #endif /* __AC_KHASH_H */

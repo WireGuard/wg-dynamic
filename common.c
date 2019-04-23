@@ -25,12 +25,20 @@ static bool parse_ip_cidr(struct wg_combined_ip *ip, char *value)
 {
 	uintmax_t res;
 	char *endptr;
-	char *sep = strchr(value, '/');
+	char *sep;
+
+	if (value[0] == '\0') {
+		memset(ip, 0, ip->family == AF_INET ? 4 : 16);
+		ip->cidr = 0;
+		return true;
+	}
+
+	sep = strchr(value, '/');
 	if (!sep)
 		return false;
 
 	*sep = '\0';
-	if (inet_pton(ip->family, value, &ip->ip) != 1)
+	if (inet_pton(ip->family, value, ip) != 1)
 		return false;
 
 	res = strtoumax(sep + 1, &endptr, 10);

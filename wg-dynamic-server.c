@@ -25,6 +25,7 @@
 #include "common.h"
 #include "dbg.h"
 #include "khash.h"
+#include "lease.h"
 #include "netlink.h"
 
 static const char *progname;
@@ -246,57 +247,6 @@ static void accept_incoming(int sockfd, struct wg_dynamic_request *reqs)
 	}
 }
 
-static int allocate_from_pool(struct wg_dynamic_request *const req,
-			      struct wg_dynamic_lease *lease)
-{
-	struct wg_dynamic_attr *attr;
-	struct wg_combined_ip default_v4 = { .family = AF_INET, .cidr = 32 },
-			      default_v6 = { .family = AF_INET6, .cidr = 128 };
-
-	/* NOTE: handing out whatever the client asks for */
-	/* TODO: choose an ip address from pool of available
-	 * addresses, together with an appropriate lease time */
-	/* NOTE: the pool is to be drawn from what routes are pointing
-	 * to the wg interface, and kept up to date as the routing
-	 * table changes */
-
-	if (inet_pton(AF_INET, "192.168.47.11", &default_v4.ip.ip4) != 1)
-		fatal("inet_pton()");
-	memcpy(&lease->ip4, &default_v4, sizeof(struct wg_combined_ip));
-
-	if (inet_pton(AF_INET6, "fd00::4711", &default_v6.ip.ip6) != 1)
-		fatal("inet_pton()");
-	memcpy(&lease->ip6, &default_v6, sizeof(struct wg_combined_ip));
-
-	lease->start = current_time();
-	lease->leasetime = WG_DYNAMIC_LEASETIME;
-
-	attr = req->first;
-	while (attr) {
-		switch (attr->key) {
-		case WGKEY_IPV4:
-			memcpy(&lease->ip4, attr->value,
-			       sizeof(struct wg_combined_ip));
-			break;
-		case WGKEY_IPV6:
-			memcpy(&lease->ip6, attr->value,
-			       sizeof(struct wg_combined_ip));
-			break;
-		case WGKEY_LEASETIME:
-			memcpy(&lease->leasetime, attr->value,
-			       sizeof(uint32_t));
-			break;
-		default:
-			debug("Ignoring invalid attribute for request_ip: %d\n",
-			      attr->key);
-		}
-
-		attr = attr->next;
-	}
-
-	return 0;
-}
-
 static bool send_error(int fd, int ret)
 {
 	UNUSED(fd);
@@ -304,39 +254,32 @@ static bool send_error(int fd, int ret)
 	return true;
 }
 
-static bool serialise_lease(char *buf, size_t bufsize, size_t *offset,
+static void serialise_lease(char *buf, size_t bufsize, size_t *offset,
 			    const struct wg_dynamic_lease *lease)
 {
 	char addrbuf[INET6_ADDRSTRLEN];
-	bool ret = false;
 
-	if (lease->ip4.ip.ip4.s_addr) {
-		if (!inet_ntop(AF_INET, &lease->ip4.ip.ip4, addrbuf,
-			       sizeof addrbuf))
+	if (lease->ipv4.s_addr) {
+		if (!inet_ntop(AF_INET, &lease->ipv4, addrbuf, sizeof addrbuf))
 			fatal("inet_ntop()");
 		*offset += print_to_buf(buf, bufsize, *offset, "ipv4=%s/%d\n",
-					addrbuf, lease->ip4.cidr);
-		ret = true;
+					addrbuf, 32);
 	}
-	if (!IN6_IS_ADDR_UNSPECIFIED(&lease->ip6.ip.ip6)) {
-		if (!inet_ntop(AF_INET6, &lease->ip6.ip.ip6, addrbuf,
-			       sizeof addrbuf))
+
+	if (!IN6_IS_ADDR_UNSPECIFIED(&lease->ipv6)) {
+		if (!inet_ntop(AF_INET6, &lease->ipv6, addrbuf, sizeof addrbuf))
 			fatal("inet_ntop()");
 		*offset += print_to_buf(buf, bufsize, *offset, "ipv6=%s/%d\n",
-					addrbuf, lease->ip6.cidr);
-		ret = true;
+					addrbuf, 128);
 	}
 
-	if (ret) {
-		*offset += print_to_buf(buf, bufsize, *offset,
-					"leasestart=%u\n", lease->start);
-		*offset += print_to_buf(buf, bufsize, *offset, "leasetime=%u\n",
-					lease->leasetime);
-	}
-
-	return ret;
+	*offset += print_to_buf(buf, bufsize, *offset, "leasestart=%u\n",
+				lease->start_real);
+	*offset += print_to_buf(buf, bufsize, *offset, "leasetime=%u\n",
+				lease->leasetime);
 }
 
+/* TODO: put this in a hashtable instead? */
 static struct wg_peer *current_peer(struct wg_dynamic_request *req)
 {
 	struct wg_peer *peer;
@@ -346,29 +289,12 @@ static struct wg_peer *current_peer(struct wg_dynamic_request *req)
 			return peer;
 	}
 
-	return NULL;
+	die("Unable to find peer\n");
 }
 
-static void insert_allowed_ip(struct wg_peer *peer,
-			      const struct wg_combined_ip *ip)
+/* TODO: this will overwrite changes done to the interface by others */
+static void insert_allowed_ip(struct wg_peer *peer, struct wg_allowedip *newip)
 {
-	struct wg_allowedip *newip;
-
-	newip = calloc(1, sizeof(struct wg_allowedip));
-	if (!newip)
-		fatal("calloc()");
-
-	newip->family = ip->family;
-	switch (newip->family) {
-	case AF_INET:
-		memcpy(&newip->ip4, &ip->ip.ip4, sizeof(struct in_addr));
-		break;
-	case AF_INET6:
-		memcpy(&newip->ip6, &ip->ip.ip6, sizeof(struct in6_addr));
-		break;
-	}
-	newip->cidr = ip->cidr;
-
 	if (!peer->first_allowedip)
 		peer->first_allowedip = newip;
 	else
@@ -376,62 +302,96 @@ static void insert_allowed_ip(struct wg_peer *peer,
 	peer->last_allowedip = newip;
 }
 
-static int add_allowed_ips(struct wg_peer *peer,
-			   const struct wg_dynamic_lease *lease)
+static int add_allowed_ips(struct wg_peer *peer, struct in_addr *ipv4,
+			   struct in6_addr *ipv6)
 {
-	if (lease->ip4.ip.ip4.s_addr)
-		insert_allowed_ip(peer, &lease->ip4);
-	if (!IN6_IS_ADDR_UNSPECIFIED(&lease->ip6.ip.ip6))
-		insert_allowed_ip(peer, &lease->ip6);
+	struct wg_allowedip *newip;
+
+	if (ipv4 && ipv4->s_addr) {
+		newip = calloc(1, sizeof *newip);
+		if (!newip)
+			fatal("calloc()");
+
+		newip->family = AF_INET;
+		newip->cidr = 32;
+		memcpy(&newip->ip4, &ipv4->s_addr, sizeof(struct in_addr));
+		insert_allowed_ip(peer, newip);
+	}
+	if (ipv6 && !IN6_IS_ADDR_UNSPECIFIED(ipv6)) {
+		newip = calloc(1, sizeof *newip);
+		if (!newip)
+			fatal("calloc()");
+
+		newip->family = AF_INET6;
+		newip->cidr = 128;
+		memcpy(&newip->ip6, &ipv6->s6_addr, sizeof(struct in6_addr));
+		insert_allowed_ip(peer, newip);
+	}
 
 	return wg_set_device(device);
 }
 
+static int response_request_ip(struct wg_dynamic_attr *cur, wg_key pubkey,
+			       struct wg_dynamic_lease **lease)
+{
+	time_t expires;
+	struct in_addr *ipv4 = NULL;
+	struct in6_addr *ipv6 = NULL;
+	uint32_t leasetime = WG_DYNAMIC_LEASETIME;
+
+	*lease = get_leases(pubkey);
+
+	while (cur) {
+		switch (cur->key) {
+		case WGKEY_IPV4:
+			ipv4 = &((struct wg_combined_ip *)cur->value)->ip4;
+			break;
+		case WGKEY_IPV6:
+			ipv6 = &((struct wg_combined_ip *)cur->value)->ip6;
+			break;
+		case WGKEY_LEASETIME:
+			leasetime = *(uint32_t *)cur->value;
+			break;
+		default:
+			debug("Ignoring invalid attribute for request_ip: %d\n",
+			      cur->key);
+		}
+		cur = cur->next;
+	}
+
+	if (ipv4 && ipv6 && !ipv4->s_addr && IN6_IS_ADDR_UNSPECIFIED(ipv6))
+		return 2; /* TODO: invalid request */
+
+	*lease = new_lease(pubkey, leasetime, ipv4, ipv6, &expires);
+	if (!*lease)
+		return 1; /* TODO: either out of IPs or IP unavailable */
+
+	return 0;
+}
+
 static bool send_response(int fd, struct wg_dynamic_request *req)
 {
-	int ret;
 	char *errmsg = "OK";
+	struct wg_dynamic_attr *cur = req->first;
+	struct wg_dynamic_lease *lease;
 	unsigned char buf[MAX_RESPONSE_SIZE + 1];
 	size_t msglen;
 	size_t written;
-	struct wg_dynamic_lease lease = { 0 };
-	struct wg_peer *peer;
+	int ret = 0;
 
-	peer = current_peer(req);
-	if (!peer)
-		die("Unable to find peer\n");
-
-	ret = 0;
-	msglen = 0;
 	switch (req->cmd) {
 	case WGKEY_REQUEST_IP:
 		msglen = print_to_buf((char *)buf, sizeof buf, 0, "%s=%d\n",
 				      WG_DYNAMIC_KEY[req->cmd], 1);
-		ret = allocate_from_pool(req, &lease);
+		ret = response_request_ip(cur, req->pubkey, &lease);
 		if (ret) {
-			debug("IP address allocation failing with %d\n", ret);
-			ret = 0x02;
-			errmsg = "Out of IP addresses";
+			errmsg = "Out of IP addresses"; /* TODO: distinguish */
 			break;
 		}
 
-		ret = add_allowed_ips(peer, &lease);
-		if (ret) {
-			debug("Unable to add address(es) to peer: %s\n",
-			      strerror(-ret));
-			ret = 0x1;
-			errmsg = "Internal error";
-			break;
-		}
-
-		if (!serialise_lease((char *)buf, sizeof buf, &msglen,
-				     &lease)) {
-			die("Nothing to hand out, despite succeeding allocate_from_pool()\n");
-			break;
-		}
-
+		add_allowed_ips(current_peer(req), &lease->ipv4, &lease->ipv6);
+		serialise_lease((char *)buf, sizeof buf, &msglen, lease);
 		break;
-
 	default:
 		debug("Unknown command: %d\n", req->cmd);
 		return true;
@@ -486,6 +446,7 @@ static void setup_socket(int *fd)
 
 static void cleanup()
 {
+	leases_free();
 	kh_destroy(allowedht, allowedips_ht);
 	wg_free_device(device);
 
@@ -518,6 +479,8 @@ int main(int argc, char *argv[])
 		usage();
 
 	allowedips_ht = kh_init(allowedht);
+
+	leases_init("leases_file");
 
 	wg_interface = argv[1];
 	if (atexit(cleanup))

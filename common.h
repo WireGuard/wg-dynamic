@@ -6,10 +6,11 @@
 #ifndef __COMMON_H__
 #define __COMMON_H__
 
+#include <libmnl/libmnl.h>
+#include <netinet/in.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdlib.h>
-#include <netinet/in.h>
 
 #include "netlink.h"
 
@@ -65,20 +66,12 @@ struct wg_dynamic_request {
 };
 
 struct wg_combined_ip {
-	uint16_t family;
 	union {
 		struct in_addr ip4;
 		struct in6_addr ip6;
-	} ip;
+	};
+	uint16_t family;
 	uint8_t cidr;
-};
-
-struct wg_dynamic_lease {
-	struct wg_combined_ip ip4;
-	struct wg_combined_ip ip6;
-	uint32_t start;
-	uint32_t leasetime;
-	struct wg_dynamic_lease *next;
 };
 
 #define ARRAY_SIZE(arr) (sizeof(arr) / sizeof((arr)[0]))

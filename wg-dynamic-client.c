@@ -20,6 +20,14 @@
 #include "dbg.h"
 #include "netlink.h"
 
+struct wg_dynamic_lease {
+	struct wg_combined_ip ip4;
+	struct wg_combined_ip ip6;
+	uint32_t start;
+	uint32_t leasetime;
+	struct wg_dynamic_lease *next;
+};
+
 static const char *progname;
 static const char *wg_interface;
 static wg_device *device = NULL;
@@ -70,12 +78,12 @@ int data_cb(const struct nlmsghdr *nlh, void *data)
 		switch (ifa->ifa_family) {
 		case AF_INET:
 			cb_data->gaddr4->family = ifa->ifa_family;
-			memcpy(&cb_data->gaddr4->ip, addr, 4);
+			memcpy(&cb_data->gaddr4->ip4, addr, 4);
 			cb_data->gaddr4->cidr = ifa->ifa_prefixlen;
 			break;
 		case AF_INET6:
 			cb_data->gaddr6->family = ifa->ifa_family;
-			memcpy(&cb_data->gaddr6->ip, addr, 16);
+			memcpy(&cb_data->gaddr6->ip6, addr, 16);
 			cb_data->gaddr6->cidr = ifa->ifa_prefixlen;
 			break;
 		default:
@@ -114,8 +122,7 @@ static void iface_update(uint16_t cmd, uint16_t flags, uint32_t ifindex,
 	ifaddr->ifa_prefixlen = addr->cidr;
 	ifaddr->ifa_scope = RT_SCOPE_UNIVERSE; /* linux/rtnetlink.h */
 	ifaddr->ifa_index = ifindex;
-	mnl_attr_put(nlh, IFA_LOCAL, addr->family == AF_INET ? 4 : 16,
-		     &addr->ip);
+	mnl_attr_put(nlh, IFA_LOCAL, addr->family == AF_INET ? 4 : 16, &addr);
 
 	if (mnl_socket_sendto(nl, nlh, nlh->nlmsg_len) < 0)
 		fatal("mnl_socket_sendto");
@@ -138,8 +145,8 @@ static void iface_remove_addr(uint32_t ifindex,
 {
 	char ipstr[INET6_ADDRSTRLEN];
 	debug("removing %s/%u from interface %u\n",
-	      inet_ntop(addr->family, &addr->ip, ipstr, sizeof ipstr),
-	      addr->cidr, ifindex);
+	      inet_ntop(addr->family, &addr, ipstr, sizeof ipstr), addr->cidr,
+	      ifindex);
 	iface_update(RTM_DELADDR, 0, ifindex, addr);
 }
 
@@ -147,8 +154,8 @@ static void iface_add_addr(uint32_t ifindex, const struct wg_combined_ip *addr)
 {
 	char ipstr[INET6_ADDRSTRLEN];
 	debug("adding %s/%u to interface %u\n",
-	      inet_ntop(addr->family, &addr->ip, ipstr, sizeof ipstr),
-	      addr->cidr, ifindex);
+	      inet_ntop(addr->family, &addr, ipstr, sizeof ipstr), addr->cidr,
+	      ifindex);
 	iface_update(RTM_NEWADDR, NLM_F_REPLACE | NLM_F_CREATE, ifindex, addr);
 }
 
@@ -172,7 +179,7 @@ static bool get_and_validate_local_addrs(uint32_t ifindex,
 
 static int try_connect(int *fd)
 {
-	struct timeval tval = {.tv_sec = 1, .tv_usec = 0 };
+	struct timeval tval = { .tv_sec = 1, .tv_usec = 0 };
 	struct sockaddr_in6 our_addr = {
 		.sin6_family = AF_INET6,
 		.sin6_addr = our_lladdr,
@@ -227,15 +234,15 @@ static void request_ip(int fd, const struct wg_dynamic_lease *lease)
 	msglen += print_to_buf((char *)buf, sizeof buf, msglen, "%s=%d\n",
 			       WG_DYNAMIC_KEY[WGKEY_REQUEST_IP], 1);
 
-	if (lease && lease->ip4.ip.ip4.s_addr) {
-		if (!inet_ntop(AF_INET, &lease->ip4.ip.ip4, addrstr,
+	if (lease && lease->ip4.ip4.s_addr) {
+		if (!inet_ntop(AF_INET, &lease->ip4.ip4, addrstr,
 			       sizeof addrstr))
 			fatal("inet_ntop()");
 		msglen += print_to_buf((char *)buf, sizeof buf, msglen,
 				       "ipv4=%s/32\n", addrstr);
 	}
-	if (lease && !IN6_IS_ADDR_UNSPECIFIED(&lease->ip6.ip.ip6)) {
-		if (!inet_ntop(AF_INET6, &lease->ip6.ip.ip6, addrstr,
+	if (lease && !IN6_IS_ADDR_UNSPECIFIED(&lease->ip6.ip6)) {
+		if (!inet_ntop(AF_INET6, &lease->ip6.ip6, addrstr,
 			       sizeof addrstr))
 			fatal("inet_ntop()");
 		msglen += print_to_buf((char *)buf, sizeof buf, msglen,
@@ -307,9 +314,8 @@ static int handle_received_lease(const struct wg_dynamic_request *req)
 		attr = attr->next;
 	}
 
-	if (lease->leasetime == 0 ||
-	    (lease->ip4.ip.ip4.s_addr == 0 &&
-	     IN6_IS_ADDR_UNSPECIFIED(&lease->ip6.ip.ip6)))
+	if (lease->leasetime == 0 || (lease->ip4.ip4.s_addr == 0 &&
+				      IN6_IS_ADDR_UNSPECIFIED(&lease->ip6.ip6)))
 		return -EINVAL;
 
 	if (abs(now - lease_start) < 15)
@@ -342,16 +348,16 @@ static bool handle_error(int fd, int ret)
 
 static void maybe_update_iface()
 {
-	if (memcmp(&our_gaddr4.ip, &our_lease.ip4.ip, sizeof our_gaddr4.ip) ||
+	if (memcmp(&our_gaddr4, &our_lease.ip4, sizeof our_gaddr4) ||
 	    our_gaddr4.cidr != our_lease.ip4.cidr) {
-		if (our_gaddr4.ip.ip4.s_addr)
+		if (our_gaddr4.ip4.s_addr)
 			iface_remove_addr(device->ifindex, &our_gaddr4);
 		iface_add_addr(device->ifindex, &our_lease.ip4);
 		memcpy(&our_gaddr4, &our_lease.ip4, sizeof our_gaddr4);
 	}
-	if (memcmp(&our_gaddr6.ip, &our_lease.ip6.ip, sizeof our_gaddr6.ip) ||
+	if (memcmp(&our_gaddr6, &our_lease.ip6, sizeof our_gaddr6) ||
 	    our_gaddr6.cidr != our_lease.ip6.cidr) {
-		if (!IN6_IS_ADDR_UNSPECIFIED(&our_gaddr6.ip.ip6))
+		if (!IN6_IS_ADDR_UNSPECIFIED(&our_gaddr6.ip6))
 			iface_remove_addr(device->ifindex, &our_gaddr6);
 		iface_add_addr(device->ifindex, &our_lease.ip6);
 		memcpy(&our_gaddr6, &our_lease.ip6, sizeof our_gaddr6);
@@ -420,8 +426,8 @@ int main(int argc __attribute__((unused)), char *argv[] __attribute__((unused)))
 
 	/* If we have an address configured, let's assume it's from a
 	 * lease in order to get renewal done. */
-	if (our_gaddr4.ip.ip4.s_addr ||
-	    !IN6_IS_ADDR_UNSPECIFIED(&our_gaddr6.ip.ip6)) {
+	if (our_gaddr4.ip4.s_addr ||
+	    !IN6_IS_ADDR_UNSPECIFIED(&our_gaddr6.ip6)) {
 		our_lease.start = current_time();
 		our_lease.leasetime = 15;
 		memcpy(&our_lease.ip4, &our_gaddr4,
