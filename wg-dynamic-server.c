@@ -548,8 +548,6 @@ int main(int argc, char *argv[])
 			if (!(pollfds[i].revents & POLLOUT))
 				continue;
 
-			pollfds[i].revents &= ~POLLOUT;
-
 			off = send_message(pollfds[i].fd, reqs[i - 1].buf,
 					   &reqs[i - 1].buflen);
 			if (reqs[i - 1].buflen)
@@ -563,7 +561,6 @@ int main(int argc, char *argv[])
 			if (pollfds[i].fd < 0 || !pollfds[i].revents & POLLIN)
 				continue;
 
-			pollfds[i].revents &= ~POLLIN;
 			if (handle_request(pollfds[i].fd, &reqs[i - 1],
 					   send_response, send_error))
 				close_connection(&pollfds[i].fd, &reqs[i - 1]);

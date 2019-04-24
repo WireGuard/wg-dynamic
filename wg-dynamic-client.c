@@ -505,7 +505,6 @@ int main(int argc __attribute__((unused)), char *argv[] __attribute__((unused)))
 		}
 
 		if (pollfds[0].revents & POLLOUT) {
-			pollfds[0].revents &= ~POLLOUT;
 			debug("sending, trying again with %lu bytes\n",
 			      req.buflen);
 			off = send_message(pollfds[0].fd, req.buf, &req.buflen);
@@ -516,7 +515,6 @@ int main(int argc __attribute__((unused)), char *argv[] __attribute__((unused)))
 		}
 
 		if (pollfds[0].revents & POLLIN) {
-			pollfds[0].revents &= ~POLLIN;
 			if (handle_request(pollfds[0].fd, &req, handle_response,
 					   handle_error))
 				close_connection(&pollfds[0].fd, &req);
