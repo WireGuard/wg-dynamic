@@ -559,9 +559,13 @@ int main(int argc, char *argv[])
 				continue;
 
 			pollfds[i].revents &= ~POLLOUT;
-			send_message(pollfds[i].fd, reqs[i - 1].buf,
-				     &reqs[i - 1].buflen);
-			if (!reqs[i - 1].buflen)
+
+			size_t w = send_message(pollfds[i].fd, reqs[i - 1].buf,
+						&reqs[i - 1].buflen);
+			if (reqs[i - 1].buflen)
+				memmove(reqs[i - 1].buf, reqs[i - 1].buf + w,
+					reqs[i - 1].buflen);
+			else
 				close_connection(&pollfds[i].fd, &reqs[i - 1]);
 		}
 

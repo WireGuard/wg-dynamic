@@ -507,8 +507,11 @@ int main(int argc __attribute__((unused)), char *argv[] __attribute__((unused)))
 			pollfds[0].revents &= ~POLLOUT;
 			debug("sending, trying again with %lu bytes\n",
 			      req.buflen);
-			send_message(pollfds[0].fd, req.buf, &req.buflen);
-			if (!req.buflen)
+			size_t w = send_message(pollfds[0].fd, req.buf,
+						&req.buflen);
+			if (req.buflen)
+				memmove(req.buf, req.buf + w, req.buflen);
+			else
 				close_connection(&pollfds[0].fd, &req);
 		}
 
