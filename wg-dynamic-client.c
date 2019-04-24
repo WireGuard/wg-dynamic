@@ -490,6 +490,7 @@ int main(int argc __attribute__((unused)), char *argv[] __attribute__((unused)))
 
 	pollfds[0] = (struct pollfd){.fd = -1, .events = POLLIN };
 	while (1) {
+		size_t off;
 		int nevents = poll(pollfds, 1, LEASE_CHECK_INTERVAL);
 
 		if (nevents == -1)
@@ -507,10 +508,9 @@ int main(int argc __attribute__((unused)), char *argv[] __attribute__((unused)))
 			pollfds[0].revents &= ~POLLOUT;
 			debug("sending, trying again with %lu bytes\n",
 			      req.buflen);
-			size_t w = send_message(pollfds[0].fd, req.buf,
-						&req.buflen);
+			off = send_message(pollfds[0].fd, req.buf, &req.buflen);
 			if (req.buflen)
-				memmove(req.buf, req.buf + w, req.buflen);
+				memmove(req.buf, req.buf + off, req.buflen);
 			else
 				close_connection(&pollfds[0].fd, &req);
 		}

@@ -555,15 +555,17 @@ int main(int argc, char *argv[])
 		}
 
 		for (int i = 1; i < MAX_CONNECTIONS + 1; ++i) {
+			size_t off;
+
 			if (!(pollfds[i].revents & POLLOUT))
 				continue;
 
 			pollfds[i].revents &= ~POLLOUT;
 
-			size_t w = send_message(pollfds[i].fd, reqs[i - 1].buf,
-						&reqs[i - 1].buflen);
+			off = send_message(pollfds[i].fd, reqs[i - 1].buf,
+					   &reqs[i - 1].buflen);
 			if (reqs[i - 1].buflen)
-				memmove(reqs[i - 1].buf, reqs[i - 1].buf + w,
+				memmove(reqs[i - 1].buf, reqs[i - 1].buf + off,
 					reqs[i - 1].buflen);
 			else
 				close_connection(&pollfds[i].fd, &reqs[i - 1]);
