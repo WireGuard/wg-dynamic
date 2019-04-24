@@ -13,12 +13,12 @@ Example of a successful key registration:
 
 ### server
 
+TOOD: explain 'forwardkey' (and maybe change the name?)
+
 - forwardkey: 0..*
 
   - data:
-    - current-pubkey [key]
     - current-peer [peer]
-    - new-pubkey [key]
     - new-peer [peer]
 
   - states and possible transitions:
@@ -31,7 +31,6 @@ Example of a successful key registration:
     - request: incoming register_key request from client
     - session-up: wg event "session established with new-peer"
     - session-down: wg event "session closed with current-peer"
-
 
   - state transitions:
     - <new>:
@@ -49,7 +48,6 @@ Example of a successful key registration:
 
   - data:
     - keypair
-    - peer
 
   - states and possible transitions:
     - <new>      -> REGISTERED
