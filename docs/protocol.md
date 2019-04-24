@@ -2,7 +2,7 @@
 
 The wg-dynamic protocol runs over a reliable and ordered data stream
 between a client and a server. Addressing is done on an upper layer,
-typically TCP.
+typically IP.
 
 The protocol consists of ASCII messages with key=value pairs separated
 by newline characters. A message ends with two consecutive newline
