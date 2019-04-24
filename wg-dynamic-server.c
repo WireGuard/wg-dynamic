@@ -80,8 +80,7 @@ static int data_cb(const struct nlmsghdr *nlh, void *data)
 static bool validate_link_local_ip(uint32_t ifindex)
 {
 	struct mnl_cb_data cb_data = {
-		.ifindex = ifindex,
-		.valid_ip_found = false,
+		.ifindex = ifindex, .valid_ip_found = false,
 	};
 
 	iface_get_all_addrs(AF_INET6, data_cb, &cb_data);
@@ -448,9 +447,11 @@ static bool send_response(int fd, struct wg_dynamic_request *req)
 		return true;
 	}
 
-	msglen += print_to_buf((char *)buf, sizeof buf, msglen, "errno=%d\n", ret);
+	msglen += print_to_buf((char *)buf, sizeof buf, msglen, "errno=%d\n",
+			       ret);
 	if (ret)
-		msglen += print_to_buf((char *)buf, sizeof buf, msglen, "errmsg=%s\n", errmsg);
+		msglen += print_to_buf((char *)buf, sizeof buf, msglen,
+				       "errmsg=%s\n", errmsg);
 	if (msglen == sizeof buf)
 		fatal("Outbuffer too small");
 	buf[msglen++] = '\n';
@@ -518,8 +519,7 @@ int main(int argc, char *argv[])
 
 	for (int i = 0; i < MAX_CONNECTIONS + 1; ++i) {
 		pollfds[i] = (struct pollfd){
-			.fd = -1,
-			.events = POLLIN,
+			.fd = -1, .events = POLLIN,
 		};
 	}
 
