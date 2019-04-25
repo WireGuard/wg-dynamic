@@ -425,7 +425,7 @@ int main(int argc __attribute__((unused)), char *argv[] __attribute__((unused)))
 {
 	int *fd = &our_fd;
 	struct wg_dynamic_request req = { 0 };
-	uint32_t now = current_time(), naptime;
+	uint32_t naptime;
 
 	progname = argv[0];
 	if (argc != 2)
@@ -451,7 +451,7 @@ int main(int argc __attribute__((unused)), char *argv[] __attribute__((unused)))
 
 	if (our_gaddr4.ip.ip4.s_addr ||
 	    !IN6_IS_ADDR_UNSPECIFIED(&our_gaddr6.ip.ip6)) {
-		our_lease.start = now;
+		our_lease.start = current_time();
 		our_lease.leasetime = 15;
 		memcpy(&our_lease.ip4, &our_gaddr4,
 		       sizeof(struct wg_combined_ip));
@@ -460,8 +460,7 @@ int main(int argc __attribute__((unused)), char *argv[] __attribute__((unused)))
 	}
 
 	while (1) {
-		now = current_time();
-		naptime = time_until_refresh(now, &our_lease);
+		naptime = time_until_refresh(current_time(), &our_lease);
 		sleep(MAX(1, naptime));
 
 		if (*fd == -1 && try_connect(fd))
