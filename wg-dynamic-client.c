@@ -425,7 +425,6 @@ int main(int argc __attribute__((unused)), char *argv[] __attribute__((unused)))
 {
 	int *fd = &our_fd;
 	struct wg_dynamic_request req = { 0 };
-	uint32_t naptime;
 
 	progname = argv[0];
 	if (argc != 2)
@@ -460,8 +459,7 @@ int main(int argc __attribute__((unused)), char *argv[] __attribute__((unused)))
 	}
 
 	while (1) {
-		naptime = time_until_refresh(current_time(), &our_lease);
-		sleep(MAX(1, naptime));
+		sleep(MAX(1, time_until_refresh(current_time(), &our_lease)));
 
 		if (*fd == -1 && try_connect(fd))
 			continue;
