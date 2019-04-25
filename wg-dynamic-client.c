@@ -170,26 +170,6 @@ static bool get_and_validate_local_addrs(uint32_t ifindex,
 	return !IN6_IS_ADDR_UNSPECIFIED(cb_data.lladdr);
 }
 
-#if 0
-static void dump_leases()
-{
-	char ip4str[INET6_ADDRSTRLEN], ip6str[INET6_ADDRSTRLEN];
-	struct wg_dynamic_lease *l = &our_lease;
-
-	if (l->start == 0) {
-		debug("lease NONE\n");
-		return;
-	}
-
-	debug("lease %u %u %s/%u %s/%u\n", l->start + l->leasetime,
-	      l->start + l->leasetime - current_time(),
-	      inet_ntop(AF_INET, &l->ip4.ip.ip4, ip4str, INET6_ADDRSTRLEN),
-	      l->ip4.cidr,
-	      inet_ntop(AF_INET6, &l->ip6.ip.ip6, ip6str, INET6_ADDRSTRLEN),
-	      l->ip6.cidr);
-}
-#endif
-
 static int try_connect(int *fd)
 {
 	struct timeval tval = {.tv_sec = 1, .tv_usec = 0 };
