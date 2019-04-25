@@ -428,6 +428,8 @@ int main(int argc __attribute__((unused)), char *argv[] __attribute__((unused)))
 	debug("%s: %s\n", wg_interface,
 	      inet_ntop(AF_INET6, &our_lladdr, lladr_str, sizeof lladr_str));
 
+	/* If we have an address configured, let's assume it's from a
+	 * lease in order to get renewal done. */
 	if (our_gaddr4.ip.ip4.s_addr ||
 	    !IN6_IS_ADDR_UNSPECIFIED(&our_gaddr6.ip.ip6)) {
 		our_lease.start = current_time();
