@@ -217,13 +217,11 @@ static int try_connect(int *fd)
 	return 0;
 }
 
-static bool request_ip(int fd, struct wg_dynamic_request *req,
-		       const struct wg_dynamic_lease *lease)
+static void request_ip(int fd, const struct wg_dynamic_lease *lease)
 {
 	unsigned char buf[MAX_RESPONSE_SIZE + 1];
 	char addrstr[INET6_ADDRSTRLEN];
 	size_t msglen;
-	size_t written;
 
 	msglen = 0;
 	msglen += print_to_buf((char *)buf, sizeof buf, msglen, "%s=%d\n",
@@ -248,15 +246,7 @@ static bool request_ip(int fd, struct wg_dynamic_request *req,
 
 	msglen += print_to_buf((char *)buf, sizeof buf, msglen, "\n");
 
-	written = send_message(fd, buf, &msglen);
-	if (msglen == 0)
-		return true;
-
-	debug("Socket %d blocking with %lu bytes to write, postponing\n", fd,
-	      msglen);
-	send_later(req, buf + written, msglen);
-
-	return false;
+	send_message(fd, buf, &msglen);
 }
 
 static uint32_t time_until_refresh(uint32_t now, struct wg_dynamic_lease *lease)
@@ -446,16 +436,7 @@ int main(int argc __attribute__((unused)), char *argv[] __attribute__((unused)))
 		if (*fd == -1 && try_connect(fd))
 			continue;
 
-		/* Short read might only happen if we set SO_SNDTIMEO
-		 * which we currently don't. FIXME: Remove? */
-		while (req.buflen) {
-			size_t off = send_message(*fd, req.buf, &req.buflen);
-			memmove(req.buf, req.buf + off, req.buflen);
-			sleep(1);
-		}
-
-		if (!request_ip(*fd, &req, &our_lease))
-			continue;
+		request_ip(*fd, &our_lease);
 
 		while (!read_response(*fd, &req, handle_response, handle_error))
 			sleep(1);
