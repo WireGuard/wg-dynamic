@@ -431,15 +431,17 @@ int main(int argc __attribute__((unused)), char *argv[] __attribute__((unused)))
 	}
 
 	while (1) {
-		sleep(MAX(1, time_until_refresh(current_time(), &our_lease)));
+		sleep(time_until_refresh(current_time(), &our_lease));
 
-		if (*fd == -1 && try_connect(fd))
+		if (*fd == -1 && try_connect(fd)) {
+			sleep(1);
 			continue;
+		}
 
 		request_ip(*fd, &our_lease);
 
 		while (!read_response(*fd, &req, handle_response, handle_error))
-			sleep(1);
+			;
 		close_connection(fd, &req);
 	}
 
