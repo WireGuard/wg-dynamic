@@ -418,7 +418,7 @@ static bool send_response(int fd, struct wg_dynamic_request *req)
 		ret = allocate_from_pool(req, &lease);
 		if (ret) {
 			debug("IP address allocation failing with %d\n", ret);
-			ret = 0x01;
+			ret = 0x02;
 			errmsg = "Out of IP addresses";
 			break;
 		}
@@ -427,7 +427,7 @@ static bool send_response(int fd, struct wg_dynamic_request *req)
 		if (ret) {
 			debug("Unable to add address(es) to peer: %s\n",
 			      strerror(-ret));
-			ret = 0x2;
+			ret = 0x1;
 			errmsg = "Internal error";
 			break;
 		}
