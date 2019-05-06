@@ -435,8 +435,6 @@ static bool send_response(int fd, struct wg_dynamic_request *req)
 		if (!serialise_lease((char *)buf, sizeof buf, &msglen,
 				     &lease)) {
 			die("Nothing to hand out, despite succeeding allocate_from_pool()\n");
-			ret = 0x3;
-			errmsg = "Internal error";
 			break;
 		}
 
