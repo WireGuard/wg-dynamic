@@ -89,7 +89,7 @@ static struct wg_dynamic_attr *parse_value(enum wg_dynamic_key key, char *value)
 		break;
 	default:
 		debug("Invalid key %d, aborting\n", key);
-		abort();
+		BUG();
 	}
 
 	attr = malloc(sizeof(struct wg_dynamic_attr) + len);

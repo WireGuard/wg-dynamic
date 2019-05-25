@@ -45,6 +45,9 @@ extern int DBG_LVL;
 #endif
 
 #define debug(...) do { if (DEBUG) log_err(__VA_ARGS__); } while (0)
+#define BUG() do { __BUG(_FILENAME, __LINE__); abort(); } while (0)
+#define __BUG(f,l) fprintf(stderr, "BUG: " f ":" STRINGIFY(l) "\n")
+#define BUG_ON(cond) do { if (cond) BUG(); } while (0)
 
 #define assert_str_equal(a,b) ({ \
 	if (strcmp(a, b)) { \
