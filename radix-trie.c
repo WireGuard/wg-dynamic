@@ -288,16 +288,15 @@ static int add(struct radix_node **trie, uint8_t bits, const uint8_t *key,
 
 static void radix_free_nodes(struct radix_node *node)
 {
-	struct radix_node *old, *bottom = node;
-
-	while (node) {
-		while (bottom->bit[0])
-			bottom = bottom->bit[0];
-		bottom->bit[0] = node->bit[1];
-
-		old = node;
-		node = node->bit[0];
-		free(old);
+	for (struct radix_node *next; node; node = next) {
+		next = node->bit[0];
+		if (next) {
+			node->bit[0] = next->bit[1];
+			next->bit[1] = node;
+		} else {
+			next = node->bit[1];
+			free(node);
+		}
 	}
 }
 
@@ -467,16 +466,14 @@ void ipp_free(struct ip_pool *pool)
 	radix_free_nodes(pool->ip4_root);
 	radix_free_nodes(pool->ip6_root);
 
-	for (struct radix_pool *cur = pool->ip4_pool; cur; cur = cur->next) {
+	for (struct radix_pool *cur = pool->ip4_pool; cur; cur = next) {
 		next = cur->next;
 		free(cur);
-		cur = next;
 	}
 
-	for (struct radix_pool *cur = pool->ip6_pool; cur; cur = cur->next) {
+	for (struct radix_pool *cur = pool->ip6_pool; cur; cur = next) {
 		next = cur->next;
 		free(cur);
-		cur = next;
 	}
 }
 
