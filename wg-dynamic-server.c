@@ -279,56 +279,38 @@ static void serialise_lease(char *buf, size_t bufsize, size_t *offset,
 				lease->leasetime);
 }
 
-/* TODO: put this in a hashtable instead? */
-static struct wg_peer *current_peer(struct wg_dynamic_request *req)
+static void add_allowed_ips(wg_key pubkey, struct in_addr *ipv4,
+			    struct in6_addr *ipv6)
 {
-	struct wg_peer *peer;
+	wg_allowedip allowed_v4, allowed_v6;
+	wg_peer peer = { 0 };
+	wg_device dev = { .first_peer = &peer };
 
-	wg_for_each_peer (device, peer) {
-		if (!memcmp(peer->public_key, req->pubkey, sizeof(wg_key)))
-			return peer;
+	strcpy(dev.name, wg_interface);
+	memcpy(peer.public_key, pubkey, sizeof peer.public_key);
+	wg_allowedip **cur = &peer.first_allowedip;
+
+	if (ipv4) {
+		allowed_v4 = (wg_allowedip){
+			.family = AF_INET,
+			.cidr = 32,
+			.ip4 = *ipv4,
+		};
+		*cur = &allowed_v4;
+		cur = &allowed_v4.next_allowedip;
 	}
 
-	die("Unable to find peer\n");
-}
-
-/* TODO: this will overwrite changes done to the interface by others */
-static void insert_allowed_ip(struct wg_peer *peer, struct wg_allowedip *newip)
-{
-	if (!peer->first_allowedip)
-		peer->first_allowedip = newip;
-	else
-		peer->last_allowedip->next_allowedip = newip;
-	peer->last_allowedip = newip;
-}
-
-static int add_allowed_ips(struct wg_peer *peer, struct in_addr *ipv4,
-			   struct in6_addr *ipv6)
-{
-	struct wg_allowedip *newip;
-
-	if (ipv4 && ipv4->s_addr) {
-		newip = calloc(1, sizeof *newip);
-		if (!newip)
-			fatal("calloc()");
-
-		newip->family = AF_INET;
-		newip->cidr = 32;
-		memcpy(&newip->ip4, &ipv4->s_addr, sizeof(struct in_addr));
-		insert_allowed_ip(peer, newip);
-	}
-	if (ipv6 && !IN6_IS_ADDR_UNSPECIFIED(ipv6)) {
-		newip = calloc(1, sizeof *newip);
-		if (!newip)
-			fatal("calloc()");
-
-		newip->family = AF_INET6;
-		newip->cidr = 128;
-		memcpy(&newip->ip6, &ipv6->s6_addr, sizeof(struct in6_addr));
-		insert_allowed_ip(peer, newip);
+	if (ipv6) {
+		allowed_v6 = (wg_allowedip){
+			.family = AF_INET6,
+			.cidr = 128,
+			.ip6 = *ipv6,
+		};
+		*cur = &allowed_v6;
 	}
 
-	return wg_set_device(device);
+	if (wg_set_device(&dev))
+		fatal("wg_set_device()");
 }
 
 static int response_request_ip(struct wg_dynamic_attr *cur, wg_key pubkey,
@@ -389,7 +371,7 @@ static bool send_response(int fd, struct wg_dynamic_request *req)
 			break;
 		}
 
-		add_allowed_ips(current_peer(req), &lease->ipv4, &lease->ipv6);
+		add_allowed_ips(req->pubkey, &lease->ipv4, &lease->ipv6);
 		serialise_lease((char *)buf, sizeof buf, &msglen, lease);
 		break;
 	default:
