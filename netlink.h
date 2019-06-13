@@ -12,6 +12,7 @@
 #include <time.h>
 #include <stdint.h>
 #include <stdbool.h>
+#include <linux/if.h>
 
 typedef uint8_t wg_key[32];
 typedef char wg_key_b64_string[((sizeof(wg_key) + 2) / 3) * 4 + 1];
