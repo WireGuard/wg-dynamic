@@ -202,25 +202,6 @@ static ssize_t parse_line(unsigned char *buf, size_t len,
 	return line_len;
 }
 
-void free_wg_dynamic_request(struct wg_dynamic_request *req)
-{
-	struct wg_dynamic_attr *prev, *cur = req->first;
-
-	while (cur) {
-		prev = cur;
-		cur = cur->next;
-		free(prev);
-	}
-
-	req->cmd = WGKEY_UNKNOWN;
-	req->version = 0;
-	free(req->buf);
-	req->buf = NULL;
-	req->buflen = 0;
-	req->first = NULL;
-	req->last = NULL;
-}
-
 static int parse_request(struct wg_dynamic_request *req, unsigned char *buf,
 			 size_t len)
 {
@@ -273,7 +254,7 @@ static int parse_request(struct wg_dynamic_request *req, unsigned char *buf,
 	return 1;
 }
 
-bool handle_request(int fd, struct wg_dynamic_request *req,
+bool handle_request(struct wg_dynamic_request *req,
 		    bool (*success)(int, struct wg_dynamic_request *),
 		    bool (*error)(int, int))
 {
@@ -282,14 +263,14 @@ bool handle_request(int fd, struct wg_dynamic_request *req,
 	unsigned char buf[RECV_BUFSIZE + MAX_LINESIZE];
 
 	while (1) {
-		bytes = read(fd, buf, RECV_BUFSIZE);
+		bytes = read(req->fd, buf, RECV_BUFSIZE);
 		if (bytes < 0) {
 			if (errno == EWOULDBLOCK || errno == EAGAIN)
 				break;
 
 			// TODO: handle EINTR
 
-			debug("Reading from socket %d failed: %s\n", fd,
+			debug("Reading from socket %d failed: %s\n", req->fd,
 			      strerror(errno));
 			return true;
 		} else if (bytes == 0) {
@@ -299,9 +280,9 @@ bool handle_request(int fd, struct wg_dynamic_request *req,
 
 		ret = parse_request(req, buf, bytes);
 		if (ret < 0)
-			return error(fd, -ret);
+			return error(req->fd, -ret);
 		else if (ret == 0)
-			return success(fd, req);
+			return success(req->fd, req);
 	}
 
 	return false;
@@ -367,13 +348,27 @@ uint32_t current_time()
 	return tp.tv_sec;
 }
 
-void close_connection(int *fd, struct wg_dynamic_request *req)
+void close_connection(struct wg_dynamic_request *req)
 {
-	if (close(*fd))
+	struct wg_dynamic_attr *prev, *cur = req->first;
+
+	if (close(req->fd))
 		debug("Failed to close socket\n");
 
-	*fd = -1;
-	free_wg_dynamic_request(req);
+	while (cur) {
+		prev = cur;
+		cur = cur->next;
+		free(prev);
+	}
+
+	req->cmd = WGKEY_UNKNOWN;
+	req->version = 0;
+	req->fd = -1;
+	free(req->buf);
+	req->buf = NULL;
+	req->buflen = 0;
+	req->first = NULL;
+	req->last = NULL;
 }
 
 bool is_link_local(unsigned char *addr)

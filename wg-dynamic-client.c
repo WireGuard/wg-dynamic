@@ -390,13 +390,6 @@ static bool handle_response(int fd, struct wg_dynamic_request *req)
 	return true;
 }
 
-static bool read_response(int fd, struct wg_dynamic_request *req,
-			  bool (*success)(int, struct wg_dynamic_request *),
-			  bool (*error)(int, int))
-{
-	return handle_request(fd, req, success, error);
-}
-
 int main(int argc __attribute__((unused)), char *argv[] __attribute__((unused)))
 {
 	int *fd = &our_fd;
@@ -446,9 +439,9 @@ int main(int argc __attribute__((unused)), char *argv[] __attribute__((unused)))
 
 		request_ip(*fd, &our_lease);
 
-		while (!read_response(*fd, &req, handle_response, handle_error))
+		while (!handle_request(&req, handle_response, handle_error))
 			;
-		close_connection(fd, &req);
+		close_connection(&req);
 	}
 
 	return 0;
