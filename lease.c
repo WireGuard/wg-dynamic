@@ -28,10 +28,6 @@ static time_t get_monotonic_time()
 {
 	struct timespec monotime;
 #ifdef __linux__
-	/* in linux 4.17, CLOCK_MONOTONIC was changed to be like CLOCK_BOOTTIME,
-	 * see https://git.kernel.org/torvalds/c/d6ed449, but glibc's wrapper
-	 * seems to still have the old behavior
-	 */
 	if (clock_gettime(CLOCK_BOOTTIME, &monotime))
 		fatal("clock_gettime(CLOCK_BOOTTIME)");
 #else
