@@ -16,8 +16,6 @@
 #include "dbg.h"
 #include "radix-trie.h"
 
-#define MIN(X, Y) (((X) < (Y)) ? (X) : (Y))
-
 #ifndef __aligned
 #define __aligned(x) __attribute__((aligned(x)))
 #endif
@@ -116,7 +114,7 @@ static bool prefix_matches(const struct radix_node *node, const uint8_t *key,
 }
 
 #define CHOOSE_NODE(parent, key)                                               \
-	parent->bit[(key[parent->bit_at_a] >> parent->bit_at_b) & 1]
+	(parent)->bit[(key[(parent)->bit_at_a] >> (parent)->bit_at_b) & 1]
 
 static bool node_placement(struct radix_node *trie, const uint8_t *key,
 			   uint8_t cidr, uint8_t bits,
@@ -350,6 +348,34 @@ static int insert_v6(struct radix_node **root, const struct in6_addr *ip,
 	return ret;
 }
 
+static int remove_node(struct radix_node *trie, const uint8_t *key,
+		       uint8_t bits)
+{
+	struct radix_node **node = &trie, **target = NULL;
+
+	while (*node && prefix_matches(*node, key, bits)) {
+		if ((*node)->is_leaf) {
+			target = node;
+			break;
+		}
+
+		if (CHOOSE_NODE(*node, key) == (*node)->bit[0])
+			++((*node)->left);
+		else
+			++((*node)->right);
+
+		node = &CHOOSE_NODE(*node, key);
+	}
+
+	if (!target)
+		return 1; /* key not found in trie */
+
+	*target = NULL;
+	radix_free_nodes(*node);
+
+	return 0;
+}
+
 static int ipp_addpool(struct radix_pool **pool, struct radix_node **root,
 		       uint8_t bits, const uint8_t *key, uint8_t cidr)
 {
@@ -477,6 +503,22 @@ int ipp_add_v4(struct ip_pool *pool, const struct in_addr *ip, uint8_t cidr)
 int ipp_add_v6(struct ip_pool *pool, const struct in6_addr *ip, uint8_t cidr)
 {
 	return insert_v6(&pool->ip6_root, ip, cidr);
+}
+
+int ipp_del_v4(struct ip_pool *pool, const struct in_addr *ip, uint8_t cidr)
+{
+	uint8_t key[4] __aligned(__alignof(uint32_t));
+	swap_endian(key, (const uint8_t *)ip, 32);
+
+	return remove_node(pool->ip4_root, key, cidr);
+}
+
+int ipp_del_v6(struct ip_pool *pool, const struct in6_addr *ip, uint8_t cidr)
+{
+	uint8_t key[16] __aligned(__alignof(uint64_t));
+	swap_endian(key, (const uint8_t *)ip, 128);
+
+	return remove_node(pool->ip6_root, key, cidr);
 }
 
 int ipp_addpool_v4(struct ip_pool *pool, const struct in_addr *ip, uint8_t cidr)

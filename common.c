@@ -12,7 +12,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
-#include <sys/param.h>
 
 #include <arpa/inet.h>
 #include <libmnl/libmnl.h>

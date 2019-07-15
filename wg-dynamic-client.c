@@ -14,7 +14,6 @@
 #include <arpa/inet.h>
 #include <libmnl/libmnl.h>
 #include <linux/rtnetlink.h>
-#include <sys/param.h>
 
 #include "common.h"
 #include "dbg.h"

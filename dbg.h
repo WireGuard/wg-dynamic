@@ -66,4 +66,6 @@ extern int DBG_LVL;
 /* A neat macro that silences unused parameter warnings compiler independant */
 #define UNUSED(x) (void)(x)
 
+#define MIN(X, Y) (((X) < (Y)) ? (X) : (Y))
+
 #endif

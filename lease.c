@@ -15,8 +15,10 @@
 #include "radix-trie.h"
 #include "random.h"
 
+#define TIME_T_MAX (((time_t)1 << (sizeof(time_t) * CHAR_BIT - 2)) - 1) * 2 + 1
+
 static struct ip_pool pools;
-static time_t gexpires;
+static time_t gexpires = TIME_T_MAX;
 
 KHASH_MAP_INIT_WGKEY(leaseht, struct wg_dynamic_lease *)
 khash_t(leaseht) * leases_ht;
@@ -75,8 +77,7 @@ void leases_free()
 }
 
 struct wg_dynamic_lease *new_lease(wg_key pubkey, uint32_t leasetime,
-				   struct in_addr *ipv4, struct in6_addr *ipv6,
-				   time_t *expires)
+				   struct in_addr *ipv4, struct in6_addr *ipv6)
 {
 	struct wg_dynamic_lease *lease, *parent;
 	uint64_t index_low;
@@ -138,8 +139,13 @@ struct wg_dynamic_lease *new_lease(wg_key pubkey, uint32_t leasetime,
 			ipp_addnth_v6(&pools, &lease->ipv6, index_low,
 				      index_high);
 		} else {
-			if (ipp_add_v6(&pools, ipv6, 128))
-				return NULL; /* TODO: free ipv4 addr */
+			if (ipp_add_v6(&pools, ipv6, 128)) {
+				if (!ipv4 || ipv4->s_addr)
+					ipp_del_v4(&pools, ipv4, 32);
+
+				return NULL;
+			}
+
 			memcpy(&lease->ipv6, ipv6, sizeof *ipv6);
 		}
 	}
@@ -154,7 +160,7 @@ struct wg_dynamic_lease *new_lease(wg_key pubkey, uint32_t leasetime,
 
 	k = kh_put(leaseht, leases_ht, pubkey, &ret);
 	if (ret < 0) {
-		die("kh_put()");
+		fatal("kh_put()");
 	} else if (ret == 0) {
 		parent = kh_value(leases_ht, k);
 		while (parent->next)
@@ -165,10 +171,8 @@ struct wg_dynamic_lease *new_lease(wg_key pubkey, uint32_t leasetime,
 		kh_value(leases_ht, k) = lease;
 	}
 
-	if (lease->start_mono < gexpires)
-		gexpires = lease->start_mono;
-
-	*expires = gexpires;
+	if (lease->start_mono + lease->leasetime < gexpires)
+		gexpires = lease->start_mono + lease->leasetime;
 
 	/* TODO: add record to file */
 
@@ -185,19 +189,59 @@ struct wg_dynamic_lease *get_leases(wg_key pubkey)
 		return kh_val(leases_ht, k);
 }
 
-bool extend_lease(struct wg_dynamic_lease *lease, uint32_t leasetime,
-		  time_t *expires)
+bool extend_lease(struct wg_dynamic_lease *lease, uint32_t leasetime)
 {
 	UNUSED(lease);
 	UNUSED(leasetime);
-	UNUSED(expires);
 	return false;
 }
 
-time_t leases_refresh()
+int leases_refresh()
 {
-	/* TODO: remove expired leases */
-	return gexpires;
+	time_t cur_time = get_monotonic_time();
+
+	if (cur_time < gexpires)
+		return MIN(INT_MAX / 1000, gexpires - cur_time);
+
+	gexpires = TIME_T_MAX;
+
+	for (khint_t k = kh_begin(leases_ht); k != kh_end(leases_ht); ++k) {
+		if (!kh_exist(leases_ht, k))
+			continue;
+
+		struct wg_dynamic_lease **pp = &kh_val(leases_ht, k), *tmp;
+		while (*pp) {
+			struct in_addr *ipv4 = &(*pp)->ipv4;
+			struct in6_addr *ipv6 = &(*pp)->ipv6;
+			time_t expires = (*pp)->start_mono + (*pp)->leasetime;
+			if (cur_time >= expires) {
+				if (ipv4->s_addr) {
+					ipp_del_v4(&pools, ipv4, 32);
+					++total_ipv4;
+				}
+				if (!IN6_IS_ADDR_UNSPECIFIED(ipv6)) {
+					ipp_del_v6(&pools, ipv6, 128);
+					++totall_ipv6;
+					if (totall_ipv6 == 0)
+						++totalh_ipv6;
+				}
+
+				tmp = *pp;
+				*pp = (*pp)->next;
+				free(tmp);
+			} else {
+				if (expires < gexpires)
+					gexpires = expires;
+
+				pp = &(*pp)->next;
+			}
+		}
+
+		if (!kh_val(leases_ht, k))
+			kh_del(leaseht, leases_ht, k);
+	}
+
+	return MIN(INT_MAX / 1000, gexpires - cur_time);
 }
 
 void leases_update_pools(int fd)

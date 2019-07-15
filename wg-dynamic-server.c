@@ -291,7 +291,6 @@ static void add_allowed_ips(wg_key pubkey, struct in_addr *ipv4,
 static int response_request_ip(struct wg_dynamic_attr *cur, wg_key pubkey,
 			       struct wg_dynamic_lease **lease)
 {
-	time_t expires;
 	struct in_addr *ipv4 = NULL;
 	struct in6_addr *ipv6 = NULL;
 	uint32_t leasetime = WG_DYNAMIC_LEASETIME;
@@ -319,7 +318,7 @@ static int response_request_ip(struct wg_dynamic_attr *cur, wg_key pubkey,
 	if (ipv4 && ipv6 && !ipv4->s_addr && IN6_IS_ADDR_UNSPECIFIED(ipv6))
 		return 2; /* TODO: invalid request */
 
-	*lease = new_lease(pubkey, leasetime, ipv4, ipv6, &expires);
+	*lease = new_lease(pubkey, leasetime, ipv4, ipv6);
 	if (!*lease)
 		return 1; /* TODO: either out of IPs or IP unavailable */
 
@@ -524,7 +523,8 @@ static void poll_loop()
 		fatal("epoll_ctl()");
 
 	while (1) {
-		int nfds = epoll_wait(epollfd, events, MAX_CONNECTIONS, -1);
+		time_t next = leases_refresh() * 1000;
+		int nfds = epoll_wait(epollfd, events, MAX_CONNECTIONS, next);
 		if (nfds == -1) {
 			if (errno == EINTR)
 				continue;
