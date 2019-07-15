@@ -350,24 +350,11 @@ static int insert_v6(struct radix_node **root, const struct in6_addr *ip,
 	return ret;
 }
 
-static struct radix_node *find_node(struct radix_node *trie, uint8_t bits,
-				    const uint8_t *key)
-{
-	struct radix_node *node = trie, *found = NULL;
-
-	while (node && prefix_matches(node, key, bits)) {
-		found = node;
-		if (node->cidr == bits)
-			break;
-		node = CHOOSE_NODE(node, key);
-	}
-	return found;
-}
-
 static int ipp_addpool(struct radix_pool **pool, struct radix_node **root,
 		       uint8_t bits, const uint8_t *key, uint8_t cidr)
 {
 	struct radix_pool *newpool;
+	struct radix_node *node;
 
 	while (*pool) {
 		if (common_bits((*pool)->node, key, bits) >= cidr)
@@ -388,8 +375,13 @@ static int ipp_addpool(struct radix_pool **pool, struct radix_node **root,
 	if (!newpool)
 		fatal("malloc()");
 
-	newpool->node = find_node(*root, bits, key);
-	BUG_ON(!newpool->node);
+	node = *root;
+	while (node->cidr != cidr) {
+		node = CHOOSE_NODE(node, key);
+
+		BUG_ON(!node || !prefix_matches(node, key, bits));
+	}
+	newpool->node = node;
 	newpool->next = NULL;
 	*pool = newpool;
 
