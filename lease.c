@@ -17,14 +17,11 @@
 
 #define TIME_T_MAX (((time_t)1 << (sizeof(time_t) * CHAR_BIT - 2)) - 1) * 2 + 1
 
-static struct ip_pool pools;
+static struct ip_pool pool;
 static time_t gexpires = TIME_T_MAX;
 
 KHASH_MAP_INIT_WGKEY(leaseht, struct wg_dynamic_lease *)
 khash_t(leaseht) * leases_ht;
-
-static uint64_t totall_ipv6;
-static uint32_t totalh_ipv6, total_ipv4;
 
 static time_t get_monotonic_time()
 {
@@ -51,9 +48,9 @@ void leases_init(char *fname)
 
 	leases_ht = kh_init(leaseht);
 
-	ipp_init(&pools);
+	ipp_init(&pool);
 
-	/* TODO: initialize pools properly from routes */
+	/* TODO: initialize pool properly from routes */
 	struct in_addr pool1_v4, pool2_v4;
 	struct in6_addr pool1_v6, pool2_v6;
 	inet_pton(AF_INET, "192.168.4.0", &pool1_v4);
@@ -61,87 +58,72 @@ void leases_init(char *fname)
 	inet_pton(AF_INET6, "2001:db8:1234::", &pool1_v6);
 	inet_pton(AF_INET6, "2001:db8:7777::", &pool2_v6);
 
-	ipp_addpool_v4(&pools, &pool1_v4, 28);
-	ipp_addpool_v4(&pools, &pool2_v4, 27);
-	ipp_addpool_v6(&pools, &pool1_v6, 124);
-	ipp_addpool_v6(&pools, &pool2_v6, 124);
-
-	total_ipv4 = ipp_gettotal_v4(&pools);
-	totall_ipv6 = ipp_gettotal_v6(&pools, &totalh_ipv6);
+	ipp_addpool_v4(&pool, &pool1_v4, 28);
+	ipp_addpool_v4(&pool, &pool2_v4, 27);
+	ipp_addpool_v6(&pool, &pool1_v6, 124);
+	ipp_addpool_v6(&pool, &pool2_v6, 124);
 }
 
 void leases_free()
 {
 	kh_destroy(leaseht, leases_ht);
-	ipp_free(&pools);
+	ipp_free(&pool);
 }
 
 struct wg_dynamic_lease *new_lease(wg_key pubkey, uint32_t leasetime,
 				   struct in_addr *ipv4, struct in6_addr *ipv6)
 {
 	struct wg_dynamic_lease *lease, *parent;
-	uint64_t index_low;
-	uint32_t index, index_high;
+	uint64_t index_l;
+	uint32_t index, index_h;
 	struct timespec tp;
 	khiter_t k;
 	int ret;
+	bool wants_ipv4 = !ipv4 || ipv4->s_addr;
+	bool wants_ipv6 = !ipv6 || !IN6_IS_ADDR_UNSPECIFIED(ipv6);
 
 	lease = malloc(sizeof *lease);
 	if (!lease)
 		fatal("malloc()");
 
-	if (!ipv4 || ipv4->s_addr) {
-		if (total_ipv4 == 0)
-			return NULL;
+	if (wants_ipv4 && !pool.total_ipv4)
+		return NULL; /* no ipv4 addresses available */
 
-		--total_ipv4;
-	}
-	if (!ipv6 || !IN6_IS_ADDR_UNSPECIFIED(ipv6)) {
-		if (totalh_ipv6 == 0 && totall_ipv6 == 0) {
-			if (!ipv4 || ipv4->s_addr)
-				++total_ipv4;
+	if (wants_ipv6 && !pool.totalh_ipv6 && !pool.totall_ipv6)
+		return NULL; /* no ipv6 addresses available */
 
-			return NULL;
-		}
-
-		if (totall_ipv6 == 0)
-			--totalh_ipv6;
-
-		--totall_ipv6;
-	}
-
-	if (!ipv4 || ipv4->s_addr) {
+	if (wants_ipv4) {
 		if (!ipv4) {
-			index = random_bounded(total_ipv4);
-			debug("new_lease(v4): %u of %u\n", index, total_ipv4);
-			ipp_addnth_v4(&pools, &lease->ipv4, index);
+			index = random_bounded(pool.total_ipv4 - 1);
+			debug("new_lease(v4): %u of %u\n", index,
+			      pool.total_ipv4);
+
+			ipp_addnth_v4(&pool, &lease->ipv4, index);
 		} else {
-			if (ipp_add_v4(&pools, ipv4, 32))
+			if (ipp_add_v4(&pool, ipv4, 32))
 				return NULL;
+
 			memcpy(&lease->ipv4, ipv4, sizeof *ipv4);
 		}
 	}
-	if (!ipv6 || !IN6_IS_ADDR_UNSPECIFIED(ipv6)) {
+
+	if (wants_ipv6) {
 		if (!ipv6) {
-			if (totalh_ipv6 > 0) {
-				index_low = random_bounded(UINT64_MAX);
-				if (totall_ipv6 - index_low > totall_ipv6)
-					--totalh_ipv6;
-
-				index_high = random_bounded(totalh_ipv6);
+			if (pool.totalh_ipv6 > 0) {
+				index_l = random_bounded(UINT64_MAX);
+				index_h = random_bounded(pool.totalh_ipv6 - 1);
 			} else {
-				index_low = random_bounded(totall_ipv6);
-				index_high = 0;
+				index_l = random_bounded(pool.totall_ipv6 - 1);
+				index_h = 0;
 			}
-			debug("new_lease(v6): %u:%ju of %u:%ju\n", index_high,
-			      index_low, totalh_ipv6, totall_ipv6);
 
-			ipp_addnth_v6(&pools, &lease->ipv6, index_low,
-				      index_high);
+			debug("new_lease(v6): %u:%ju of %u:%ju\n", index_h,
+			      index_l, pool.totalh_ipv6, pool.totall_ipv6);
+			ipp_addnth_v6(&pool, &lease->ipv6, index_l, index_h);
 		} else {
-			if (ipp_add_v6(&pools, ipv6, 128)) {
+			if (ipp_add_v6(&pool, ipv6, 128)) {
 				if (!ipv4 || ipv4->s_addr)
-					ipp_del_v4(&pools, ipv4, 32);
+					ipp_del_v4(&pool, ipv4, 32);
 
 				return NULL;
 			}
@@ -215,16 +197,11 @@ int leases_refresh()
 			struct in6_addr *ipv6 = &(*pp)->ipv6;
 			time_t expires = (*pp)->start_mono + (*pp)->leasetime;
 			if (cur_time >= expires) {
-				if (ipv4->s_addr) {
-					ipp_del_v4(&pools, ipv4, 32);
-					++total_ipv4;
-				}
-				if (!IN6_IS_ADDR_UNSPECIFIED(ipv6)) {
-					ipp_del_v6(&pools, ipv6, 128);
-					++totall_ipv6;
-					if (totall_ipv6 == 0)
-						++totalh_ipv6;
-				}
+				if (ipv4->s_addr)
+					ipp_del_v4(&pool, ipv4, 32);
+
+				if (!IN6_IS_ADDR_UNSPECIFIED(ipv6))
+					ipp_del_v6(&pool, ipv6, 128);
 
 				tmp = *pp;
 				*pp = (*pp)->next;

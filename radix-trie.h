@@ -11,6 +11,8 @@
 #include <stdint.h>
 
 struct ip_pool {
+	uint64_t totall_ipv6;
+	uint32_t totalh_ipv6, total_ipv4;
 	struct radix_node *ip4_root, *ip6_root;
 	struct radix_pool *ip4_pool, *ip6_pool;
 };
@@ -23,9 +25,6 @@ int ipp_add_v6(struct ip_pool *pool, const struct in6_addr *ip, uint8_t cidr);
 
 int ipp_del_v4(struct ip_pool *pool, const struct in_addr *ip, uint8_t cidr);
 int ipp_del_v6(struct ip_pool *pool, const struct in6_addr *ip, uint8_t cidr);
-
-uint32_t ipp_gettotal_v4(struct ip_pool *pool);
-uint64_t ipp_gettotal_v6(struct ip_pool *pool, uint32_t *high);
 
 void ipp_addnth_v4(struct ip_pool *pool, struct in_addr *dest, uint32_t index);
 void ipp_addnth_v6(struct ip_pool *pool, struct in6_addr *dest,

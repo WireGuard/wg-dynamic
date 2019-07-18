@@ -475,6 +475,7 @@ void ipp_init(struct ip_pool *pool)
 {
 	pool->ip4_root = pool->ip6_root = NULL;
 	pool->ip4_pool = pool->ip6_pool = NULL;
+	pool->totall_ipv6 = pool->totalh_ipv6 = pool->total_ipv4 = 0;
 }
 
 void ipp_free(struct ip_pool *pool)
@@ -497,86 +498,90 @@ void ipp_free(struct ip_pool *pool)
 
 int ipp_add_v4(struct ip_pool *pool, const struct in_addr *ip, uint8_t cidr)
 {
-	return insert_v4(&pool->ip4_root, ip, cidr);
+	int ret = insert_v4(&pool->ip4_root, ip, cidr);
+	if (!ret)
+		--pool->total_ipv4;
+
+	return ret;
 }
 
 int ipp_add_v6(struct ip_pool *pool, const struct in6_addr *ip, uint8_t cidr)
 {
-	return insert_v6(&pool->ip6_root, ip, cidr);
+	int ret = insert_v6(&pool->ip6_root, ip, cidr);
+	if (!ret) {
+		if (pool->totall_ipv6 == 0)
+			--pool->totalh_ipv6;
+
+		--pool->totall_ipv6;
+	}
+
+	return ret;
 }
 
 int ipp_del_v4(struct ip_pool *pool, const struct in_addr *ip, uint8_t cidr)
 {
 	uint8_t key[4] __aligned(__alignof(uint32_t));
-	swap_endian(key, (const uint8_t *)ip, 32);
+	int ret;
 
-	return remove_node(pool->ip4_root, key, cidr);
+	swap_endian(key, (const uint8_t *)ip, 32);
+	ret = remove_node(pool->ip4_root, key, cidr);
+	if (!ret)
+		++pool->total_ipv4;
+
+	return ret;
 }
 
 int ipp_del_v6(struct ip_pool *pool, const struct in6_addr *ip, uint8_t cidr)
 {
 	uint8_t key[16] __aligned(__alignof(uint64_t));
-	swap_endian(key, (const uint8_t *)ip, 128);
+	int ret;
 
-	return remove_node(pool->ip6_root, key, cidr);
+	swap_endian(key, (const uint8_t *)ip, 128);
+	ret = remove_node(pool->ip6_root, key, cidr);
+	if (!ret) {
+		++pool->totall_ipv6;
+		if (pool->totall_ipv6 == 0)
+			++pool->totalh_ipv6;
+	}
+
+	return ret;
 }
 
 int ipp_addpool_v4(struct ip_pool *pool, const struct in_addr *ip, uint8_t cidr)
 {
 	uint8_t key[4] __aligned(__alignof(uint32_t));
+	int ret;
 
 	if (cidr <= 0 || cidr >= 32)
 		return -1;
 
 	swap_endian(key, (const uint8_t *)ip, 32);
-	return ipp_addpool(&pool->ip4_pool, &pool->ip4_root, 32, key, cidr);
+	ret = ipp_addpool(&pool->ip4_pool, &pool->ip4_root, 32, key, cidr);
+	if (!ret)
+		pool->total_ipv4 += 1 << (32 - cidr);
+
+	return ret;
 }
 
 int ipp_addpool_v6(struct ip_pool *pool, const struct in6_addr *ip,
 		   uint8_t cidr)
 {
 	uint8_t key[16] __aligned(__alignof(uint64_t));
+	int ret;
 
-	if (cidr <= 0 || cidr < 64 || cidr >= 128)
+	if (cidr < 64 || cidr >= 128)
 		return -1;
 
 	swap_endian(key, (const uint8_t *)ip, 128);
-	return ipp_addpool(&pool->ip6_pool, &pool->ip6_root, 128, key, cidr);
-}
-
-uint32_t ipp_gettotal_v4(struct ip_pool *pool)
-{
-	struct radix_pool *current = pool->ip4_pool;
-	uint32_t total = 0;
-
-	for (current = pool->ip4_pool; current; current = current->next)
-		total += current->node->left + current->node->right;
-
-	return total;
-}
-
-uint64_t ipp_gettotal_v6(struct ip_pool *pool, uint32_t *high)
-{
-	struct radix_pool *current = pool->ip6_pool;
-	uint64_t t_low = 0, tmp;
-	uint32_t t_high = 0;
-
-	while (current) {
-		if (current->node->left == 0 && current->node->right == 0) {
-			current = current->next;
-			continue;
-		}
-
-		tmp = t_low + current->node->left + current->node->right;
-		if (tmp <= t_low)
-			++t_high;
-
-		t_low = tmp;
-		current = current->next;
+	ret = ipp_addpool(&pool->ip6_pool, &pool->ip6_root, 128, key, cidr);
+	if (!ret) {
+		uint64_t tmp = pool->totall_ipv6;
+		pool->totall_ipv6 += (cidr <= 64) ? 0 : 1 << (128 - cidr);
+		if (pool->totall_ipv6 <= tmp)
+			++pool->totalh_ipv6;
 	}
 
-	*high = t_high;
-	return t_low;
+	return ret;
 }
 
 void ipp_addnth_v4(struct ip_pool *pool, struct in_addr *dest, uint32_t index)
@@ -593,6 +598,7 @@ void ipp_addnth_v4(struct ip_pool *pool, struct in_addr *dest, uint32_t index)
 	BUG_ON(!current);
 
 	add_nth(current->node, 32, index, (uint8_t *)&dest->s_addr);
+	--pool->total_ipv4;
 }
 
 void ipp_addnth_v6(struct ip_pool *pool, struct in6_addr *dest,
@@ -621,7 +627,11 @@ void ipp_addnth_v6(struct ip_pool *pool, struct in6_addr *dest,
 		current = current->next;
 	}
 
-	BUG_ON(!pool || index_high);
+	BUG_ON(!current || index_high);
 
 	add_nth(current->node, 128, index_low, (uint8_t *)&dest->s6_addr);
+	if (pool->totall_ipv6 == 0)
+		--pool->totalh_ipv6;
+
+	--pool->totall_ipv6;
 }
