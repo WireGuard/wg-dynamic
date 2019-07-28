@@ -30,9 +30,8 @@ void ipp_addnth_v4(struct ip_pool *pool, struct in_addr *dest, uint32_t index);
 void ipp_addnth_v6(struct ip_pool *pool, struct in6_addr *dest,
 		   uint32_t index_low, uint64_t index_high);
 
-int ipp_addpool_v4(struct ip_pool *pool, const struct in_addr *ip,
-		   uint8_t cidr);
-int ipp_addpool_v6(struct ip_pool *pool, const struct in6_addr *ip,
+int ipp_addpool_v4(struct ip_pool *ipp, const struct in_addr *ip, uint8_t cidr);
+int ipp_addpool_v6(struct ip_pool *ipp, const struct in6_addr *ip,
 		   uint8_t cidr);
 
 int ipp_removepool_v4(struct ip_pool *pool, const struct in_addr *ip);
