@@ -37,6 +37,7 @@ static struct wg_dynamic_request requests[MAX_CONNECTIONS] = { 0 };
 
 static int sockfd = -1;
 static int epollfd = -1;
+static struct mnl_socket *nlsock = NULL;
 
 KHASH_MAP_INIT_INT64(allowedht, wg_key *)
 khash_t(allowedht) * allowedips_ht;
@@ -372,7 +373,7 @@ static bool send_response(int fd, struct wg_dynamic_request *req)
 	return false;
 }
 
-static void setup_socket()
+static void setup_sockets()
 {
 	int val = 1, res;
 	struct sockaddr_in6 addr = {
@@ -398,6 +399,29 @@ static void setup_socket()
 
 	if (listen(sockfd, SOMAXCONN) == -1)
 		fatal("Listening to socket failed");
+
+	/* netlink route socket */
+	nlsock = mnl_socket_open(NETLINK_ROUTE);
+	if (!nlsock)
+		fatal("mnl_socket_open(NETLINK_ROUTE)");
+
+	res = fcntl(mnl_socket_get_fd(nlsock), F_GETFL, 0);
+	if (res < 0 ||
+	    fcntl(mnl_socket_get_fd(nlsock), F_SETFL, res | O_NONBLOCK) < 0)
+		fatal("Setting netlink socket to nonblocking failed");
+
+	if (mnl_socket_bind(nlsock, 0, MNL_SOCKET_AUTOPID) < 0)
+		fatal("mnl_socket_bind()");
+
+	val = RTNLGRP_IPV4_ROUTE;
+	if (mnl_socket_setsockopt(nlsock, NETLINK_ADD_MEMBERSHIP, &val,
+				  sizeof val) < 0)
+		fatal("mnl_socket_setsockopt()");
+
+	val = RTNLGRP_IPV6_ROUTE;
+	if (mnl_socket_setsockopt(nlsock, NETLINK_ADD_MEMBERSHIP, &val,
+				  sizeof val) < 0)
+		fatal("mnl_socket_setsockopt()");
 }
 
 static void cleanup()
@@ -405,6 +429,9 @@ static void cleanup()
 	leases_free();
 	kh_destroy(allowedht, allowedips_ht);
 	wg_free_device(device);
+
+	if (nlsock)
+		mnl_socket_close(nlsock);
 
 	if (sockfd >= 0)
 		close(sockfd);
@@ -425,7 +452,6 @@ static void setup()
 	if (inet_pton(AF_INET6, WG_DYNAMIC_ADDR, &well_known) != 1)
 		fatal("inet_pton()");
 
-	leases_init("leases_file");
 	allowedips_ht = kh_init(allowedht);
 
 	for (int i = 0; i < MAX_CONNECTIONS; ++i)
@@ -445,7 +471,8 @@ static void setup()
 		die("%s has no peers with link-local allowedips\n",
 		    wg_interface);
 
-	setup_socket(&sockfd);
+	setup_sockets();
+	leases_init("leases_file", nlsock);
 }
 
 static int get_avail_request()
@@ -489,13 +516,21 @@ static void accept_incoming(int sockfd, int epollfd,
 	}
 }
 
-static void handle_event(struct wg_dynamic_request *req, uint32_t events)
+static void handle_event(void *ptr, uint32_t events)
 {
-	if (!req) {
+	struct wg_dynamic_request *req;
+
+	if (ptr == &sockfd) {
 		accept_incoming(sockfd, epollfd, requests);
 		return;
 	}
 
+	if (ptr == nlsock) {
+		leases_update_pools(nlsock);
+		return;
+	}
+
+	req = (struct wg_dynamic_request *)ptr;
 	if (events & EPOLLIN) {
 		if (handle_request(req, send_response, send_error))
 			close_connection(req);
@@ -518,8 +553,13 @@ static void poll_loop()
 		fatal("epoll_create1()");
 
 	ev.events = EPOLLIN | EPOLLET;
-	ev.data.ptr = NULL;
-	if (epoll_ctl(epollfd, EPOLL_CTL_ADD, sockfd, &ev) == -1)
+	ev.data.ptr = &sockfd;
+	if (epoll_ctl(epollfd, EPOLL_CTL_ADD, sockfd, &ev))
+		fatal("epoll_ctl()");
+
+	ev.events = EPOLLIN;
+	ev.data.ptr = nlsock;
+	if (epoll_ctl(epollfd, EPOLL_CTL_ADD, mnl_socket_get_fd(nlsock), &ev))
 		fatal("epoll_ctl()");
 
 	while (1) {

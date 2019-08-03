@@ -614,6 +614,18 @@ int ipp_addpool_v6(struct ip_pool *ipp, const struct in6_addr *ip, uint8_t cidr)
 	return ipp_addpool(ipp, &ipp->ip6_pool, &ipp->ip6_root, 128, key, cidr);
 }
 
+/* TODO: implement */
+int ipp_removepool_v4(struct ip_pool *pool, const struct in_addr *ip)
+{
+	return 0;
+}
+
+/* TODO: implement */
+int ipp_removepool_v6(struct ip_pool *pool, const struct in6_addr *ip)
+{
+	return 0;
+}
+
 void ipp_addnth_v4(struct ip_pool *pool, struct in_addr *dest, uint32_t index)
 {
 	struct radix_pool *current = pool->ip4_pool;

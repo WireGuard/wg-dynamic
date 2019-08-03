@@ -2,12 +2,16 @@
 
 #include <arpa/inet.h>
 #include <inttypes.h>
+#include <libmnl/libmnl.h>
+#include <linux/rtnetlink.h>
+#include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/socket.h>
 #include <time.h>
 
+#include "common.h"
 #include "dbg.h"
 #include "khash.h"
 #include "lease.h"
@@ -19,6 +23,7 @@
 
 static struct ip_pool pool;
 static time_t gexpires = TIME_T_MAX;
+static bool synchronized;
 
 KHASH_MAP_INIT_WGKEY(leaseht, struct wg_dynamic_lease *)
 khash_t(leaseht) * leases_ht;
@@ -42,26 +47,31 @@ static time_t get_monotonic_time()
 	return monotime.tv_sec;
 }
 
-void leases_init(char *fname)
+void leases_init(char *fname, struct mnl_socket *nlsock)
 {
-	UNUSED(fname); /* TODO: open file and initialize from it */
+	struct nlmsghdr *nlh;
+	struct rtmsg *rtm;
+	char buf[MNL_NLMSG_HDRLEN + MNL_ALIGN(sizeof *rtm)];
+	unsigned int seq;
 
+	synchronized = false;
 	leases_ht = kh_init(leaseht);
-
 	ipp_init(&pool);
 
-	/* TODO: initialize pool properly from routes */
-	struct in_addr pool1_v4, pool2_v4;
-	struct in6_addr pool1_v6, pool2_v6;
-	inet_pton(AF_INET, "192.168.4.0", &pool1_v4);
-	inet_pton(AF_INET, "192.168.73.0", &pool2_v4);
-	inet_pton(AF_INET6, "2001:db8:1234::", &pool1_v6);
-	inet_pton(AF_INET6, "2001:db8:7777::", &pool2_v6);
+	nlh = mnl_nlmsg_put_header(buf);
+	nlh->nlmsg_type = RTM_GETROUTE;
+	nlh->nlmsg_flags = NLM_F_REQUEST | NLM_F_DUMP;
+	nlh->nlmsg_seq = seq = time(NULL);
+	rtm = mnl_nlmsg_put_extra_header(nlh, sizeof(struct rtmsg));
+	rtm->rtm_family = 0; /* both ipv4 and ipv6 */
 
-	ipp_addpool_v4(&pool, &pool1_v4, 28);
-	ipp_addpool_v4(&pool, &pool2_v4, 27);
-	ipp_addpool_v6(&pool, &pool1_v6, 124);
-	ipp_addpool_v6(&pool, &pool2_v6, 124);
+	if (mnl_socket_sendto(nlsock, nlh, nlh->nlmsg_len) < 0)
+		fatal("mnl_socket_sendto()");
+
+	leases_update_pools(nlsock);
+	synchronized = true;
+
+	UNUSED(fname); /* TODO: open file and initialize from it */
 }
 
 void leases_free()
@@ -221,7 +231,102 @@ int leases_refresh()
 	return MIN(INT_MAX / 1000, gexpires - cur_time);
 }
 
-void leases_update_pools(int fd)
+static int data_ipv4_attr_cb(const struct nlattr *attr, void *data)
 {
-	UNUSED(fd);
+	const struct nlattr **tb = data;
+	int type = mnl_attr_get_type(attr);
+
+	switch (type) {
+	case RTA_DST:
+	case RTA_GATEWAY:
+		if (mnl_attr_validate(attr, MNL_TYPE_U32) < 0) {
+			log_err("mnl_attr_validate: %s\n", strerror(errno));
+			return MNL_CB_ERROR;
+		}
+		break;
+	default:
+		return MNL_CB_OK;
+	}
+	tb[type] = attr;
+	return MNL_CB_OK;
+}
+
+static int data_ipv6_attr_cb(const struct nlattr *attr, void *data)
+{
+	const struct nlattr **tb = data;
+	int type = mnl_attr_get_type(attr);
+
+	switch (type) {
+	case RTA_DST:
+	case RTA_GATEWAY:
+		if (mnl_attr_validate2(attr, MNL_TYPE_BINARY,
+				       sizeof(struct in6_addr)) < 0) {
+			log_err("mnl_attr_validate: %s\n", strerror(errno));
+			return MNL_CB_ERROR;
+		}
+		break;
+	default:
+		return MNL_CB_OK;
+	}
+	tb[type] = attr;
+	return MNL_CB_OK;
+}
+
+static int process_nlpacket_cb(const struct nlmsghdr *nlh, void *data)
+{
+	struct nlattr *tb[RTA_MAX + 1] = {};
+	struct rtmsg *rm = mnl_nlmsg_get_payload(nlh);
+	UNUSED(data);
+
+	if (rm->rtm_family == AF_INET)
+		mnl_attr_parse(nlh, sizeof(*rm), data_ipv4_attr_cb, tb);
+	else if (rm->rtm_family == AF_INET6)
+		mnl_attr_parse(nlh, sizeof(*rm), data_ipv6_attr_cb, tb);
+
+	if (tb[RTA_GATEWAY])
+		return MNL_CB_OK;
+
+	if (!tb[RTA_DST]) {
+		debug("Netlink packet without RTA_DST, ignoring\n");
+		return MNL_CB_OK;
+	}
+
+	void *addr = mnl_attr_get_payload(tb[RTA_DST]);
+	if (rm->rtm_family == AF_INET6 &&
+	    (is_link_local(addr) || IN6_IS_ADDR_MULTICAST(addr)))
+		return MNL_CB_OK;
+
+	if (nlh->nlmsg_type == RTM_NEWROUTE) {
+		if (rm->rtm_family == AF_INET) {
+			if (ipp_addpool_v4(&pool, addr, rm->rtm_dst_len))
+				die("ipp_addpool_v4()\n");
+		} else if (rm->rtm_family == AF_INET6) {
+			if (ipp_addpool_v6(&pool, addr, rm->rtm_dst_len))
+				die("ipp_addpool_v6()\n");
+		}
+	} else if (nlh->nlmsg_type == RTM_DELROUTE) {
+		if (rm->rtm_family == AF_INET) {
+			if (ipp_removepool_v4(&pool, addr) && synchronized)
+				die("ipp_removepool_v4()\n");
+		} else if (rm->rtm_family == AF_INET6) {
+			if (ipp_removepool_v6(&pool, addr) && synchronized)
+				die("ipp_removepool_v6()\n");
+		}
+	}
+
+	return MNL_CB_OK;
+}
+
+void leases_update_pools(struct mnl_socket *nlsock)
+{
+	int ret;
+	char buf[MNL_SOCKET_BUFFER_SIZE];
+
+	while ((ret = mnl_socket_recvfrom(nlsock, buf, sizeof buf)) > 0) {
+		if (mnl_cb_run(buf, ret, 0, 0, process_nlpacket_cb, NULL) == -1)
+			fatal("mnl_cb_run()");
+	}
+
+	if (ret == -1 && errno != EAGAIN && errno != EWOULDBLOCK)
+		fatal("mnl_socket_recvfrom()");
 }

@@ -8,7 +8,7 @@
 
 #include <stdint.h>
 #include <sys/socket.h>
-#include <time.h>
+#include <libmnl/libmnl.h>
 
 #include "common.h"
 #include "netlink.h"
@@ -23,9 +23,10 @@ struct wg_dynamic_lease {
 };
 
 /*
- * Initializes internal state, reads leases from fname.
+ * Initializes internal state, retrieves routes from nlsock and reads leases
+ * from fname.
  */
-void leases_init(char *fname);
+void leases_init(char *fname, struct mnl_socket *nlsock);
 
 /*
  * Frees everything, closes file.
@@ -56,8 +57,8 @@ bool extend_lease(struct wg_dynamic_lease *lease, uint32_t leasetime);
 int leases_refresh();
 
 /*
- * Updates all pools with information from the netlink file descriptor fd.
+ * Updates all pools with information from the mnl socket nlsock.
  */
-void leases_update_pools(int fd);
+void leases_update_pools(struct mnl_socket *nlsock);
 
 #endif

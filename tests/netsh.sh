@@ -73,6 +73,10 @@ configure_peers() {
 	ip2 link set up dev wg0
 
 	ip2 route add fe80::/128 dev wg0
+	ip1 route add 192.168.4.0/28 dev wg0
+	ip1 route add 192.168.73.0/27 dev wg0
+	ip1 route add 2001:db8:1234::/124 dev wg0
+	ip1 route add 2001:db8:7777::/124 dev wg0
 }
 configure_peers
 
