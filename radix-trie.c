@@ -350,28 +350,23 @@ static int insert_v6(struct radix_node **root, const struct in6_addr *ip,
 }
 
 static int remove_node(struct radix_node *trie, const uint8_t *key,
-		       uint8_t bits)
+		       uint8_t bits, uint8_t cidr, uint64_t count)
 {
-	struct radix_node **node = &trie, **target = NULL;
+	struct radix_node **node = &trie;
 
-	while (*node && prefix_matches(*node, key, bits)) {
-		if ((*node)->is_leaf) {
-			target = node;
-			break;
-		}
-
+	while (*node && common_bits(*node, key, bits) < cidr) {
 		if (CHOOSE_NODE(*node, key) == (*node)->bit[0])
-			++((*node)->left);
+			(*node)->left += count;
 		else
-			++((*node)->right);
+			(*node)->right += count;
 
 		node = &CHOOSE_NODE(*node, key);
 	}
 
-	if (!target)
+	if (!*node)
 		return 1; /* key not found in trie */
 
-	*target = NULL;
+	*node = NULL;
 	radix_free_nodes(*node);
 
 	return 0;
@@ -459,6 +454,33 @@ static int ipp_addpool(struct ip_pool *ipp, struct radix_pool **pool,
 	return 0;
 }
 
+static int ipp_removepool(struct radix_node *trie, struct radix_pool **pool,
+			  uint8_t bits, const uint8_t *key)
+{
+	struct radix_pool *tmp;
+	struct radix_node *node;
+	uint64_t taken;
+	uint8_t cidr;
+
+	while (*pool &&
+	       common_bits((*pool)->node, key, bits) < (*pool)->node->cidr)
+		pool = &(*pool)->next;
+
+	if (!*pool)
+		return -1;
+
+	node = (*pool)->node;
+	cidr = node->cidr;
+	taken = ((1ULL << (bits - cidr)) - (node->left + node->right));
+	BUG_ON(remove_node(trie, key, bits, cidr, taken));
+
+	tmp = *pool;
+	*pool = (*pool)->next;
+	free(tmp);
+
+	return cidr;
+}
+
 #ifdef DEBUG
 #include <stdio.h>
 void node_to_str(struct radix_node *node, char *buf, uint8_t bits)
@@ -503,6 +525,33 @@ static void debug_print_trie(struct radix_node *root, uint8_t bits)
 
 	debug_print_trie(root->bit[0], bits);
 	debug_print_trie(root->bit[1], bits);
+}
+
+static uint64_t count_trie(struct radix_node *node, uint8_t bits)
+{
+	uint64_t left, right;
+	if (!node)
+		return 0;
+
+	left = count_trie(node->bit[0], bits);
+	right = count_trie(node->bit[1], bits);
+
+	if (bits - node->cidr > 64 || bits - node->cidr == 0) {
+		BUG_ON(node->left || node->right);
+		return 0;
+	}
+
+	if ((1ULL << (bits - node->cidr - 1)) - right != node->right ||
+	    (1ULL << (bits - node->cidr - 1)) - left != node->left) {
+		debug("node: left: %ju, right: %ju (cidr: %u)\n", node->right,
+		      node->left, node->cidr);
+		debug("calculated: left: %ju, right: %ju\n",
+		      (1ULL << (bits - node->cidr - 1)) - left,
+		      (1ULL << (bits - node->cidr - 1)) - right);
+		BUG();
+	}
+
+	return left + right;
 }
 
 void debug_print_trie_v4(struct ip_pool *pool)
@@ -568,10 +617,11 @@ int ipp_del_v4(struct ip_pool *pool, const struct in_addr *ip, uint8_t cidr)
 	uint8_t key[4] __aligned(__alignof(uint32_t));
 	int ret;
 
+	if (cidr <= 0 || cidr > 32)
+		return -1;
+
 	swap_endian(key, (const uint8_t *)ip, 32);
-	ret = remove_node(pool->ip4_root, key, cidr);
-	if (!ret)
-		++pool->total_ipv4;
+	ret = remove_node(pool->ip4_root, key, 32, cidr, 1ULL << (32 - cidr));
 
 	return ret;
 }
@@ -581,8 +631,11 @@ int ipp_del_v6(struct ip_pool *pool, const struct in6_addr *ip, uint8_t cidr)
 	uint8_t key[16] __aligned(__alignof(uint64_t));
 	int ret;
 
+	if (cidr < 64 || cidr > 128)
+		return -1;
+
 	swap_endian(key, (const uint8_t *)ip, 128);
-	ret = remove_node(pool->ip6_root, key, cidr);
+	ret = remove_node(pool->ip6_root, key, 128, cidr, 1ULL << (128 - cidr));
 	if (!ret) {
 		++pool->totall_ipv6;
 		if (pool->totall_ipv6 == 0)
@@ -600,7 +653,11 @@ int ipp_addpool_v4(struct ip_pool *ipp, const struct in_addr *ip, uint8_t cidr)
 		return -1;
 
 	swap_endian(key, (const uint8_t *)ip, 32);
-	return ipp_addpool(ipp, &ipp->ip4_pool, &ipp->ip4_root, 32, key, cidr);
+
+	int ret =
+		ipp_addpool(ipp, &ipp->ip4_pool, &ipp->ip4_root, 32, key, cidr);
+	count_trie(ipp->ip4_root, 32);
+	return ret;
 }
 
 int ipp_addpool_v6(struct ip_pool *ipp, const struct in6_addr *ip, uint8_t cidr)
@@ -611,7 +668,42 @@ int ipp_addpool_v6(struct ip_pool *ipp, const struct in6_addr *ip, uint8_t cidr)
 		return -1;
 
 	swap_endian(key, (const uint8_t *)ip, 128);
-	return ipp_addpool(ipp, &ipp->ip6_pool, &ipp->ip6_root, 128, key, cidr);
+	int ret = ipp_addpool(ipp, &ipp->ip6_pool, &ipp->ip6_root, 128, key,
+			      cidr);
+	count_trie(ipp->ip6_root, 128);
+	return ret;
+}
+
+int ipp_removepool_v4(struct ip_pool *pool, const struct in_addr *ip)
+{
+	uint8_t key[4] __aligned(__alignof(uint32_t));
+	int cidr;
+
+	swap_endian(key, (const uint8_t *)ip, 32);
+	cidr = ipp_removepool(pool->ip4_root, &pool->ip4_pool, 32, key);
+	if (cidr < 0)
+		return -1;
+
+	totalip_dec(pool, 32, 32 - cidr);
+
+	count_trie(pool->ip4_root, 32);
+	return 0;
+}
+
+int ipp_removepool_v6(struct ip_pool *pool, const struct in6_addr *ip)
+{
+	uint8_t key[16] __aligned(__alignof(uint64_t));
+	int cidr;
+
+	swap_endian(key, (const uint8_t *)ip, 128);
+	cidr = ipp_removepool(pool->ip4_root, &pool->ip6_pool, 128, key);
+	if (cidr < 0)
+		return -1;
+
+	totalip_dec(pool, 128, 128 - cidr);
+
+	count_trie(pool->ip6_root, 128);
+	return 0;
 }
 
 void ipp_addnth_v4(struct ip_pool *pool, struct in_addr *dest, uint32_t index)
@@ -638,20 +730,21 @@ void ipp_addnth_v6(struct ip_pool *pool, struct in6_addr *dest,
 		   uint32_t index_low, uint64_t index_high)
 {
 	struct radix_pool *current = pool->ip6_pool;
+	struct radix_node *node;
 	uint64_t tmp;
 
 	while (current) {
+		node = current->node;
 		if (current->shadowed ||
-		    (current->node->left == 0 && current->node->right == 0)) {
+		    (node->left == 0 && node->right == 0)) {
 			current = current->next;
 			continue;
 		}
 
-		if (index_high == 0 &&
-		    index_low < (current->node->left + current->node->right))
+		if (index_high == 0 && index_low < (node->left + node->right))
 			break;
 
-		tmp = index_low - (current->node->left + current->node->right);
+		tmp = index_low - (node->left + node->right);
 		if (tmp >= index_low) {
 			BUG_ON(index_high == 0);
 			--index_high;
