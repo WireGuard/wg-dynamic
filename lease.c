@@ -1,4 +1,8 @@
-#define _POSIX_C_SOURCE 200809L
+/* SPDX-License-Identifier: MIT
+ *
+ * Copyright (C) 2019 WireGuard LLC. All Rights Reserved.
+ */
+#define _GNU_SOURCE
 
 #include <arpa/inet.h>
 #include <inttypes.h>
