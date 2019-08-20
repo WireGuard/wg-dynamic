@@ -254,8 +254,8 @@ static int parse_request(struct wg_dynamic_request *req, unsigned char *buf,
 }
 
 bool handle_request(struct wg_dynamic_request *req,
-		    bool (*success)(int, struct wg_dynamic_request *),
-		    bool (*error)(int, int))
+		    bool (*success)(struct wg_dynamic_request *),
+		    bool (*error)(struct wg_dynamic_request *, int))
 {
 	ssize_t bytes;
 	int ret;
@@ -279,64 +279,70 @@ bool handle_request(struct wg_dynamic_request *req,
 
 		ret = parse_request(req, buf, bytes);
 		if (ret < 0)
-			return error(req->fd, -ret);
+			return error(req, -ret);
 		else if (ret == 0)
-			return success(req->fd, req);
+			return success(req);
 	}
 
 	return false;
 }
 
-size_t send_message(int fd, unsigned char *buf, size_t *len)
+bool send_message(struct wg_dynamic_request *req, const void *buf, size_t len)
 {
-	ssize_t bytes;
 	size_t offset = 0;
 
-	while (*len) {
-		bytes = write(fd, buf + offset, *len);
-		if (bytes < 0) {
+	while (1) {
+		ssize_t written = write(req->fd, buf + offset, len - offset);
+		if (written < 0) {
 			if (errno == EWOULDBLOCK || errno == EAGAIN)
 				break;
 
 			// TODO: handle EINTR
 
-			debug("Writing to socket %d failed: %s\n", fd,
+			debug("Writing to socket %d failed: %s\n", req->fd,
 			      strerror(errno));
-			*len = 0;
-			return 0;
+			return true;
 		}
 
-		*len -= bytes;
-		offset += bytes;
+		offset += written;
+		if (offset == len)
+			return true;
 	}
 
-	return offset;
+	debug("Socket %d blocking on write with %lu bytes left, postponing\n",
+	      req->fd, len - offset);
+
+	if (!req->buf) {
+		req->buflen = len - offset;
+		req->buf = malloc(req->buflen);
+		if (!req->buf)
+			fatal("malloc()");
+
+		memcpy(req->buf, buf + offset, req->buflen);
+	} else {
+		req->buflen = len - offset;
+		memmove(req->buf, buf + offset, req->buflen);
+	}
+
+	return false;
 }
 
-void send_later(struct wg_dynamic_request *req, unsigned char *const buf,
-		size_t msglen)
-{
-	unsigned char *newbuf = malloc(msglen);
-	if (!newbuf)
-		fatal("Failed malloc()");
-	memcpy(newbuf, buf, msglen);
-
-	free(req->buf);
-	req->buf = newbuf;
-	req->buflen = msglen;
-}
-
-int print_to_buf(char *buf, size_t bufsize, size_t offset, char *fmt, ...)
+void print_to_buf(char *buf, size_t bufsize, size_t *offset, char *fmt, ...)
 {
 	va_list ap;
 	va_start(ap, fmt);
-	int n = vsnprintf(buf + offset, bufsize - offset, fmt, ap);
+	int n = vsnprintf(buf + *offset, bufsize - *offset, fmt, ap);
 	va_end(ap);
-	if (n < 0)
-		fatal("Failed snprintf");
-	if (n + offset >= bufsize)
-		die("Outbuffer too small");
-	return n;
+
+	if (n < 0) {
+		fatal("vsnprintf()");
+	} else if (n + *offset >= bufsize) {
+		debug("Outbuffer too small: %d + %zu >= %zu\n", n, *offset,
+		      bufsize);
+		BUG();
+	}
+
+	*offset += n;
 }
 
 uint32_t current_time()

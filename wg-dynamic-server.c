@@ -223,36 +223,41 @@ static int accept_connection(int sockfd, wg_key *dest)
 	return fd;
 }
 
-static bool send_error(int fd, int ret)
+static bool send_error(struct wg_dynamic_request *req, int error)
 {
-	UNUSED(fd);
-	debug("Error: %s\n", strerror(ret));
-	return true;
+	char buf[MAX_RESPONSE_SIZE];
+	size_t msglen = 0;
+
+	print_to_buf(buf, sizeof buf, &msglen, "errno=%d\nerrmsg=%s\n\n", error,
+		     WG_DYNAMIC_ERR[error]);
+
+	return send_message(req, buf, msglen);
 }
 
-static void serialise_lease(char *buf, size_t bufsize, size_t *offset,
-			    const struct wg_dynamic_lease *lease)
+static size_t serialize_lease(char *buf, size_t len,
+			      const struct wg_dynamic_lease *lease)
 {
 	char addrbuf[INET6_ADDRSTRLEN];
+	size_t off = 0;
 
 	if (lease->ipv4.s_addr) {
 		if (!inet_ntop(AF_INET, &lease->ipv4, addrbuf, sizeof addrbuf))
 			fatal("inet_ntop()");
-		*offset += print_to_buf(buf, bufsize, *offset, "ipv4=%s/%d\n",
-					addrbuf, 32);
+
+		print_to_buf(buf, len, &off, "ipv4=%s/%d\n", addrbuf, 32);
 	}
 
 	if (!IN6_IS_ADDR_UNSPECIFIED(&lease->ipv6)) {
 		if (!inet_ntop(AF_INET6, &lease->ipv6, addrbuf, sizeof addrbuf))
 			fatal("inet_ntop()");
-		*offset += print_to_buf(buf, bufsize, *offset, "ipv6=%s/%d\n",
-					addrbuf, 128);
+
+		print_to_buf(buf, len, &off, "ipv6=%s/%d\n", addrbuf, 128);
 	}
 
-	*offset += print_to_buf(buf, bufsize, *offset, "leasestart=%u\n",
-				lease->start_real);
-	*offset += print_to_buf(buf, bufsize, *offset, "leasetime=%u\n",
-				lease->leasetime);
+	print_to_buf(buf, len, &off, "leasestart=%u\nleasetime=%u\nerrno=0\n\n",
+		     lease->start_real, lease->leasetime);
+
+	return off;
 }
 
 static void add_allowed_ips(wg_key pubkey, struct in_addr *ipv4,
@@ -317,60 +322,41 @@ static int response_request_ip(struct wg_dynamic_attr *cur, wg_key pubkey,
 	}
 
 	if (ipv4 && ipv6 && !ipv4->s_addr && IN6_IS_ADDR_UNSPECIFIED(ipv6))
-		return 2; /* TODO: invalid request */
+		return E_INVALID_REQ;
 
 	*lease = new_lease(pubkey, leasetime, ipv4, ipv6);
 	if (!*lease)
-		return 1; /* TODO: either out of IPs or IP unavailable */
+		return E_IP_UNAVAIL;
 
-	return 0;
+	return E_NO_ERROR;
 }
 
-static bool send_response(int fd, struct wg_dynamic_request *req)
+static bool send_response(struct wg_dynamic_request *req)
 {
-	char *errmsg = "OK";
+	char buf[MAX_RESPONSE_SIZE];
 	struct wg_dynamic_attr *cur = req->first;
 	struct wg_dynamic_lease *lease;
-	unsigned char buf[MAX_RESPONSE_SIZE + 1];
 	size_t msglen;
-	size_t written;
-	int ret = 0;
+	int ret;
 
 	switch (req->cmd) {
 	case WGKEY_REQUEST_IP:
-		msglen = print_to_buf((char *)buf, sizeof buf, 0, "%s=%d\n",
-				      WG_DYNAMIC_KEY[req->cmd], 1);
 		ret = response_request_ip(cur, req->pubkey, &lease);
-		if (ret) {
-			errmsg = "Out of IP addresses"; /* TODO: distinguish */
+		if (ret)
 			break;
-		}
 
 		add_allowed_ips(req->pubkey, &lease->ipv4, &lease->ipv6);
-		serialise_lease((char *)buf, sizeof buf, &msglen, lease);
+		msglen = serialize_lease(buf, sizeof buf, lease);
 		break;
 	default:
 		debug("Unknown command: %d\n", req->cmd);
-		return true;
+		BUG();
 	}
 
-	msglen += print_to_buf((char *)buf, sizeof buf, msglen, "errno=%d\n",
-			       ret);
 	if (ret)
-		msglen += print_to_buf((char *)buf, sizeof buf, msglen,
-				       "errmsg=%s\n", errmsg);
-	if (msglen == sizeof buf)
-		fatal("Outbuffer too small");
-	buf[msglen++] = '\n';
+		return send_error(req, ret);
 
-	written = send_message(fd, buf, &msglen);
-	if (msglen == 0)
-		return true;
-
-	debug("Socket %d blocking on write with %lu bytes left, postponing\n",
-	      fd, msglen);
-	send_later(req, buf + written, msglen);
-	return false;
+	return send_message(req, buf, msglen);
 }
 
 static void setup_sockets()
@@ -537,10 +523,7 @@ static void handle_event(void *ptr, uint32_t events)
 	}
 
 	if (events & EPOLLOUT) {
-		size_t off = send_message(req->fd, req->buf, &req->buflen);
-		if (req->buflen)
-			memmove(req->buf, req->buf + off, req->buflen);
-		else
+		if (send_message(req, req->buf, req->buflen))
 			close_connection(req);
 	}
 }

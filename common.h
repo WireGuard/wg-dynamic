@@ -49,6 +49,19 @@ static const char *const WG_DYNAMIC_KEY[] = { ITEMS };
 #undef E
 #undef ITEMS
 
+#define ITEMS                                                                  \
+	E(E_NO_ERROR, "Success") /* must be the first entry */                 \
+	E(E_INVALID_REQ, "Invalid request")                                    \
+	E(E_IP_UNAVAIL, "Chosen IP unavailable")
+
+#define E(x, y) x,
+enum wg_dynamic_err { ITEMS };
+#undef E
+#define E(x, y) y,
+static const char *const WG_DYNAMIC_ERR[] = { ITEMS };
+#undef E
+#undef ITEMS
+
 struct wg_dynamic_attr {
 	enum wg_dynamic_key key;
 	size_t len;
@@ -79,12 +92,10 @@ struct wg_combined_ip {
 
 void free_wg_dynamic_request(struct wg_dynamic_request *req);
 bool handle_request(struct wg_dynamic_request *req,
-		    bool (*success)(int, struct wg_dynamic_request *),
-		    bool (*error)(int, int));
-size_t send_message(int fd, unsigned char *buf, size_t *len);
-void send_later(struct wg_dynamic_request *req, unsigned char *const buf,
-		size_t msglen);
-int print_to_buf(char *buf, size_t bufsize, size_t len, char *fmt, ...);
+		    bool (*success)(struct wg_dynamic_request *),
+		    bool (*error)(struct wg_dynamic_request *, int));
+bool send_message(struct wg_dynamic_request *req, const void *buf, size_t len);
+void print_to_buf(char *buf, size_t bufsize, size_t *offset, char *fmt, ...);
 uint32_t current_time();
 void close_connection(struct wg_dynamic_request *req);
 bool is_link_local(unsigned char *addr);
