@@ -161,7 +161,7 @@ struct wg_dynamic_lease *new_lease(wg_key pubkey, uint32_t leasetime,
 	lease->next = NULL;
 
 	wg_key *pubcopy = malloc(sizeof(wg_key));
-	if (!pubkey)
+	if (!pubcopy)
 		fatal("malloc()");
 
 	memcpy(pubcopy, pubkey, sizeof(wg_key));
