@@ -30,7 +30,7 @@ static time_t gexpires = TIME_T_MAX;
 static bool synchronized;
 
 KHASH_MAP_INIT_WGKEY(leaseht, struct wg_dynamic_lease *)
-khash_t(leaseht) * leases_ht;
+khash_t(leaseht) *leases_ht = NULL;
 
 static time_t get_monotonic_time()
 {
@@ -80,7 +80,13 @@ void leases_init(char *fname, struct mnl_socket *nlsock)
 
 void leases_free()
 {
+	if (leases_ht) {
+		for (khint_t k = 0; k < kh_end(leases_ht); ++k)
+			if (kh_exist(leases_ht, k))
+				free((char *)kh_key(leases_ht, k));
+	}
 	kh_destroy(leaseht, leases_ht);
+
 	ipp_free(&pool);
 }
 
@@ -154,7 +160,12 @@ struct wg_dynamic_lease *new_lease(wg_key pubkey, uint32_t leasetime,
 	lease->leasetime = leasetime;
 	lease->next = NULL;
 
-	k = kh_put(leaseht, leases_ht, pubkey, &ret);
+	wg_key *pubcopy = malloc(sizeof(wg_key));
+	if (!pubkey)
+		fatal("malloc()");
+
+	memcpy(pubcopy, pubkey, sizeof(wg_key));
+	k = kh_put(leaseht, leases_ht, *pubcopy, &ret);
 	if (ret < 0) {
 		fatal("kh_put()");
 	} else if (ret == 0) {
@@ -228,8 +239,10 @@ int leases_refresh()
 			}
 		}
 
-		if (!kh_val(leases_ht, k))
+		if (!kh_val(leases_ht, k)) {
+			free((char *)kh_key(leases_ht, k));
 			kh_del(leaseht, leases_ht, k);
+		}
 	}
 
 	return MIN(INT_MAX / 1000, gexpires - cur_time);
