@@ -43,7 +43,7 @@ COMPILE.c = @echo "  CC      $@";
 COMPILE.c += $(BUILT_IN_COMPILE.c)
 endif
 
-all: wg-dynamic-server
+all: wg-dynamic-server wg-dynamic-client
 
 wg-dynamic-client: wg-dynamic-client.o netlink.o common.o ipm.o
 wg-dynamic-server: wg-dynamic-server.o netlink.o radix-trie.o common.o random.o lease.o ipm.o

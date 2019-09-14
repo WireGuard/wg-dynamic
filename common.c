@@ -371,14 +371,6 @@ void print_to_buf(char *buf, size_t bufsize, size_t *offset, char *fmt, ...)
 	*offset += n;
 }
 
-uint32_t current_time()
-{
-	struct timespec tp;
-	if (clock_gettime(CLOCK_REALTIME, &tp))
-		fatal("clock_gettime(CLOCK_REALTIME)");
-	return tp.tv_sec;
-}
-
 bool is_link_local(unsigned char *addr)
 {
 	/* TODO: check if the remaining 54 bits are 0 */
