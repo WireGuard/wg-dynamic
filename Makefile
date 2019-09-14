@@ -45,8 +45,8 @@ endif
 
 all: wg-dynamic-server
 
-wg-dynamic-client: wg-dynamic-client.o netlink.o common.o
-wg-dynamic-server: wg-dynamic-server.o netlink.o radix-trie.o common.o random.o lease.o
+wg-dynamic-client: wg-dynamic-client.c netlink.o common.o ipm.o
+wg-dynamic-server: wg-dynamic-server.o netlink.o radix-trie.o common.o random.o lease.o ipm.o
 
 ifneq ($(V),1)
 clean:

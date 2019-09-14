@@ -72,10 +72,6 @@ struct wg_dynamic_attr {
 struct wg_dynamic_request {
 	enum wg_dynamic_key cmd;
 	uint32_t version;
-	int fd;
-	wg_key pubkey;
-	unsigned char *buf;
-	size_t buflen;
 	struct wg_dynamic_attr *first, *last;
 };
 
@@ -90,14 +86,10 @@ struct wg_combined_ip {
 
 #define ARRAY_SIZE(arr) (sizeof(arr) / sizeof((arr)[0]))
 
+int handle_request(int fd, struct wg_dynamic_request *req);
 void free_wg_dynamic_request(struct wg_dynamic_request *req);
-bool handle_request(struct wg_dynamic_request *req,
-		    bool (*success)(struct wg_dynamic_request *),
-		    bool (*error)(struct wg_dynamic_request *, int));
-bool send_message(struct wg_dynamic_request *req, const void *buf, size_t len);
+
 void print_to_buf(char *buf, size_t bufsize, size_t *offset, char *fmt, ...);
-uint32_t current_time();
-void close_connection(struct wg_dynamic_request *req);
 bool is_link_local(unsigned char *addr);
 void iface_get_all_addrs(uint8_t family, mnl_cb_t data_cb, void *cb_data);
 int data_attr_cb(const struct nlattr *attr, void *data);

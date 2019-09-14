@@ -253,78 +253,52 @@ static int parse_request(struct wg_dynamic_request *req, unsigned char *buf,
 	return 1;
 }
 
-bool handle_request(struct wg_dynamic_request *req,
-		    bool (*success)(struct wg_dynamic_request *),
-		    bool (*error)(struct wg_dynamic_request *, int))
+int handle_request(int fd, struct wg_dynamic_request *req)
 {
 	ssize_t bytes;
 	int ret;
 	unsigned char buf[RECV_BUFSIZE + MAX_LINESIZE];
 
 	while (1) {
-		bytes = read(req->fd, buf, RECV_BUFSIZE);
+		bytes = read(fd, buf, RECV_BUFSIZE);
 		if (bytes < 0) {
 			if (errno == EWOULDBLOCK || errno == EAGAIN)
 				break;
 
 			// TODO: handle EINTR
 
-			debug("Reading from socket %d failed: %s\n", req->fd,
+			debug("Reading from socket %d failed: %s\n", fd,
 			      strerror(errno));
-			return true;
+			return 1;
 		} else if (bytes == 0) {
 			debug("Peer disconnected unexpectedly\n");
-			return true;
+			return 1;
 		}
 
 		ret = parse_request(req, buf, bytes);
 		if (ret < 0)
-			return error(req, -ret);
+			return 2;
 		else if (ret == 0)
-			return success(req);
+			return 0;
 	}
 
-	return false;
+	return 0;
 }
 
-bool send_message(struct wg_dynamic_request *req, const void *buf, size_t len)
+void free_wg_dynamic_request(struct wg_dynamic_request *req)
 {
-	size_t offset = 0;
+	struct wg_dynamic_attr *prev, *cur = req->first;
 
-	while (1) {
-		ssize_t written = write(req->fd, buf + offset, len - offset);
-		if (written < 0) {
-			if (errno == EWOULDBLOCK || errno == EAGAIN)
-				break;
-
-			// TODO: handle EINTR
-
-			debug("Writing to socket %d failed: %s\n", req->fd,
-			      strerror(errno));
-			return true;
-		}
-
-		offset += written;
-		if (offset == len)
-			return true;
+	while (cur) {
+		prev = cur;
+		cur = cur->next;
+		free(prev);
 	}
 
-	debug("Socket %d blocking on write with %lu bytes left, postponing\n",
-	      req->fd, len - offset);
-
-	if (!req->buf) {
-		req->buflen = len - offset;
-		req->buf = malloc(req->buflen);
-		if (!req->buf)
-			fatal("malloc()");
-
-		memcpy(req->buf, buf + offset, req->buflen);
-	} else {
-		req->buflen = len - offset;
-		memmove(req->buf, buf + offset, req->buflen);
-	}
-
-	return false;
+	req->cmd = WGKEY_UNKNOWN;
+	req->version = 0;
+	req->first = NULL;
+	req->last = NULL;
 }
 
 void print_to_buf(char *buf, size_t bufsize, size_t *offset, char *fmt, ...)
@@ -343,37 +317,6 @@ void print_to_buf(char *buf, size_t bufsize, size_t *offset, char *fmt, ...)
 	}
 
 	*offset += n;
-}
-
-uint32_t current_time()
-{
-	struct timespec tp;
-	if (clock_gettime(CLOCK_REALTIME, &tp))
-		fatal("clock_gettime(CLOCK_REALTIME)");
-	return tp.tv_sec;
-}
-
-void close_connection(struct wg_dynamic_request *req)
-{
-	struct wg_dynamic_attr *prev, *cur = req->first;
-
-	if (close(req->fd))
-		debug("Failed to close socket\n");
-
-	while (cur) {
-		prev = cur;
-		cur = cur->next;
-		free(prev);
-	}
-
-	req->cmd = WGKEY_UNKNOWN;
-	req->version = 0;
-	req->fd = -1;
-	free(req->buf);
-	req->buf = NULL;
-	req->buflen = 0;
-	req->first = NULL;
-	req->last = NULL;
 }
 
 bool is_link_local(unsigned char *addr)
