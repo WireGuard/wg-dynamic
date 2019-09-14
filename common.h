@@ -94,6 +94,5 @@ void free_wg_dynamic_request(struct wg_dynamic_request *req);
 size_t serialize_request_ip(bool include_header, char *buf, size_t len,
 			    struct wg_dynamic_request_ip *rip);
 void print_to_buf(char *buf, size_t bufsize, size_t *offset, char *fmt, ...);
-uint32_t current_time();
 bool is_link_local(unsigned char *addr);
 #endif
