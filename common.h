@@ -95,6 +95,4 @@ size_t serialize_request_ip(bool include_header, char *buf, size_t len,
 void print_to_buf(char *buf, size_t bufsize, size_t *offset, char *fmt, ...);
 uint32_t current_time();
 bool is_link_local(unsigned char *addr);
-void iface_get_all_addrs(uint8_t family, mnl_cb_t data_cb, void *cb_data);
-int data_attr_cb(const struct nlattr *attr, void *data);
 #endif
