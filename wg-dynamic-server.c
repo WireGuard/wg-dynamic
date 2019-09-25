@@ -24,6 +24,7 @@
 
 #include "common.h"
 #include "dbg.h"
+#include "ipm.h"
 #include "khash.h"
 #include "lease.h"
 #include "netlink.h"
@@ -51,58 +52,9 @@ struct wg_dynamic_connection {
 
 static struct wg_dynamic_connection connections[MAX_CONNECTIONS] = { 0 };
 
-struct mnl_cb_data {
-	uint32_t ifindex;
-	bool valid_ip_found;
-};
-
 static void usage()
 {
 	die("usage: %s <wg-interface>\n", progname);
-}
-
-static int data_cb(const struct nlmsghdr *nlh, void *data)
-{
-	struct nlattr *tb[IFA_MAX + 1] = {};
-	struct ifaddrmsg *ifa = mnl_nlmsg_get_payload(nlh);
-	struct mnl_cb_data *cb_data = (struct mnl_cb_data *)data;
-	unsigned char *addr;
-
-	if (ifa->ifa_index != cb_data->ifindex)
-		return MNL_CB_OK;
-
-	if (ifa->ifa_scope != RT_SCOPE_LINK)
-		return MNL_CB_OK;
-
-	mnl_attr_parse(nlh, sizeof(*ifa), data_attr_cb, tb);
-
-	if (!tb[IFA_ADDRESS])
-		return MNL_CB_OK;
-
-	addr = mnl_attr_get_payload(tb[IFA_ADDRESS]);
-	char out[INET6_ADDRSTRLEN];
-	inet_ntop(ifa->ifa_family, addr, out, sizeof(out));
-	debug("index=%d, family=%d, addr=%s\n", ifa->ifa_index, ifa->ifa_family,
-	      out);
-
-	if (ifa->ifa_prefixlen != 64 || memcmp(addr, well_known.s6_addr, 16))
-		return MNL_CB_OK;
-
-	cb_data->valid_ip_found = true;
-
-	return MNL_CB_OK;
-}
-
-static bool validate_link_local_ip(uint32_t ifindex)
-{
-	struct mnl_cb_data cb_data = {
-		.ifindex = ifindex,
-		.valid_ip_found = false,
-	};
-
-	iface_get_all_addrs(AF_INET6, data_cb, &cb_data);
-
-	return cb_data.valid_ip_found;
 }
 
 static bool valid_peer_found(wg_device *device)
@@ -452,6 +404,9 @@ static void cleanup()
 
 static void setup()
 {
+	struct wg_combined_ip ip;
+	int ret;
+
 	if (inet_pton(AF_INET6, WG_DYNAMIC_ADDR, &well_known) != 1)
 		fatal("inet_pton()");
 
@@ -465,10 +420,22 @@ static void setup()
 
 	rebuild_allowedips_ht();
 
-	if (!validate_link_local_ip(device->ifindex))
-		// TODO: assign IP instead?
+	ipm_init();
+	ret = ipm_getlladdr(device->ifindex, &ip);
+	if (ret == -1)
+		fatal("ipm_getlladdr()");
+	if (ret == -2)
+		die("Interface must not have multiple link-local addresses assigned\n");
+	ipm_free();
+
+	if (ret == -1 || ip.family != AF_INET6 ||
+	    memcmp(&ip.ip6, well_known.s6_addr, 16))
+		/* TODO: assign IP instead? */
 		die("%s needs to have %s assigned\n", wg_interface,
 		    WG_DYNAMIC_ADDR);
+
+	if (ip.cidr != 64)
+		die("Link-local address must have a CIDR of 64\n");
 
 	if (!valid_peer_found(device))
 		die("%s has no peers with link-local allowedips\n",
@@ -500,13 +467,13 @@ static void accept_incoming()
 			if (fd == -ENOENT) {
 				debug("Failed to match IP to pubkey\n");
 				continue;
-			} else if (fd != -EAGAIN && fd != -EWOULDBLOCK) {
-				debug("Failed to accept connection: %s\n",
-				      strerror(-fd));
-				continue;
+			} else if (fd == -EAGAIN || fd == -EWOULDBLOCK) {
+				return;
 			}
 
-			break;
+			debug("Failed to accept connection: %s\n",
+			      strerror(-fd));
+			continue;
 		}
 
 		ev.events = EPOLLIN | EPOLLET;
