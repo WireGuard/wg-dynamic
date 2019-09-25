@@ -33,7 +33,6 @@ static const char *wg_interface = NULL;
 static struct in6_addr well_known;
 
 static wg_device *device = NULL;
-static struct wg_dynamic_request requests[MAX_CONNECTIONS] = { 0 };
 static uint32_t leasetime = 3600;
 
 static int sockfd = -1;
@@ -42,6 +41,17 @@ static struct mnl_socket *nlsock = NULL;
 
 KHASH_MAP_INIT_INT64(allowedht, wg_key *)
 khash_t(allowedht) * allowedips_ht;
+
+struct wg_dynamic_connection {
+	struct wg_dynamic_request req;
+	int fd;
+	wg_key pubkey;
+	struct in6_addr lladdr;
+	unsigned char *outbuf;
+	size_t buflen;
+};
+
+static struct wg_dynamic_connection connections[MAX_CONNECTIONS] = { 0 };
 
 struct mnl_cb_data {
 	uint32_t ifindex;
@@ -170,8 +180,7 @@ static wg_key *addr_to_pubkey(struct sockaddr_storage *addr)
 	return NULL;
 }
 
-static int accept_connection(int sockfd, wg_key *dest_pubkey,
-			     struct in6_addr *dest_lladdr)
+static int accept_connection(wg_key *dest_pubkey, struct in6_addr *dest_lladdr)
 {
 	int fd;
 	wg_key *pubkey;
@@ -230,101 +239,124 @@ static int accept_connection(int sockfd, wg_key *dest_pubkey,
 	return fd;
 }
 
-static bool send_error(struct wg_dynamic_request *req, int error)
+static bool send_message(struct wg_dynamic_connection *con,
+			 const unsigned char *buf, size_t len)
 {
-	char buf[MAX_RESPONSE_SIZE];
-	size_t msglen = 0;
+	size_t offset = 0;
 
-	print_to_buf(buf, sizeof buf, &msglen, "errno=%d\nerrmsg=%s\n\n", error,
-		     WG_DYNAMIC_ERR[error]);
+	while (1) {
+		ssize_t written = write(con->fd, buf + offset, len - offset);
+		if (written < 0) {
+			if (errno == EWOULDBLOCK || errno == EAGAIN)
+				break;
 
-	return send_message(req, buf, msglen);
-}
+			if (errno == EINTR)
+				continue;
 
-static size_t serialize_lease(char *buf, size_t len,
-			      const struct wg_dynamic_lease *lease)
-{
-	char addrbuf[INET6_ADDRSTRLEN];
-	size_t off = 0;
-
-	if (lease->ipv4.s_addr) {
-		if (!inet_ntop(AF_INET, &lease->ipv4, addrbuf, sizeof addrbuf))
-			fatal("inet_ntop()");
-
-		print_to_buf(buf, len, &off, "ipv4=%s/%d\n", addrbuf, 32);
-	}
-
-	if (!IN6_IS_ADDR_UNSPECIFIED(&lease->ipv6)) {
-		if (!inet_ntop(AF_INET6, &lease->ipv6, addrbuf, sizeof addrbuf))
-			fatal("inet_ntop()");
-
-		print_to_buf(buf, len, &off, "ipv6=%s/%d\n", addrbuf, 128);
-	}
-
-	print_to_buf(buf, len, &off, "leasestart=%u\nleasetime=%u\nerrno=0\n\n",
-		     lease->start_real, lease->leasetime);
-
-	return off;
-}
-
-static int response_request_ip(struct wg_dynamic_attr *cur, wg_key pubkey,
-			       const struct in6_addr *lladdr,
-			       struct wg_dynamic_lease **lease)
-{
-	struct in_addr *ipv4 = NULL;
-	struct in6_addr *ipv6 = NULL;
-
-	while (cur) {
-		switch (cur->key) {
-		case WGKEY_IPV4:
-			ipv4 = &((struct wg_combined_ip *)cur->value)->ip4;
-			break;
-		case WGKEY_IPV6:
-			ipv6 = &((struct wg_combined_ip *)cur->value)->ip6;
-			break;
-		case WGKEY_LEASETIME:
-			leasetime = *(uint32_t *)cur->value;
-			break;
-		default:
-			debug("Ignoring invalid attribute for request_ip: %d\n",
-			      cur->key);
+			debug("Writing to socket %d failed: %s\n", con->fd,
+			      strerror(errno));
+			return false;
 		}
-		cur = cur->next;
+
+		offset += written;
+		if (offset == len)
+			return true;
 	}
 
-	*lease = set_lease(pubkey, leasetime, lladdr, ipv4, ipv6);
-	if (!*lease)
-		return E_IP_UNAVAIL;
+	debug("Socket %d blocking on write with %lu bytes left, postponing\n",
+	      con->fd, len - offset);
 
-	return E_NO_ERROR;
+	if (!con->outbuf) {
+		con->buflen = len - offset;
+		con->outbuf = malloc(con->buflen);
+		if (!con->outbuf)
+			fatal("malloc()");
+
+		memcpy(con->outbuf, buf + offset, con->buflen);
+	} else {
+		con->buflen = len - offset;
+		memmove(con->outbuf, buf + offset, con->buflen);
+	}
+
+	return true;
 }
 
-static bool send_response(struct wg_dynamic_request *req)
+void close_connection(struct wg_dynamic_connection *con)
+{
+	free_wg_dynamic_request(&con->req);
+
+	if (close(con->fd))
+		debug("Failed to close socket\n");
+
+	con->fd = -1;
+	memset(con->pubkey, 0, sizeof con->pubkey);
+	free(con->outbuf);
+	con->outbuf = NULL;
+	con->buflen = 0;
+}
+
+static bool send_response(struct wg_dynamic_connection *con)
 {
 	char buf[MAX_RESPONSE_SIZE];
-	struct wg_dynamic_attr *cur = req->first;
-	struct wg_dynamic_lease *lease;
 	size_t msglen;
-	int ret;
 
-	switch (req->cmd) {
-	case WGKEY_REQUEST_IP:
-		ret = response_request_ip(cur, req->pubkey, &req->lladdr,
-					  &lease);
-		if (ret)
-			break;
+	switch (con->req.cmd) {
+	case WGKEY_REQUEST_IP:;
+		struct wg_dynamic_request_ip *rip = con->req.result;
+		struct in_addr *ip4 = rip->has_ipv4 ? &rip->ipv4 : NULL;
+		struct in6_addr *ip6 = rip->has_ipv6 ? &rip->ipv6 : NULL;
+		struct wg_dynamic_lease *lease;
+		struct wg_dynamic_request_ip ans = { 0 };
 
-		msglen = serialize_lease(buf, sizeof buf, lease);
+		lease = set_lease(con->pubkey, leasetime, &con->lladdr, ip4,
+				  ip6);
+		if (lease) {
+			memcpy(&ans.ipv4, &lease->ipv4, sizeof ans.ipv4);
+			memcpy(&ans.ipv6, &lease->ipv6, sizeof ans.ipv6);
+			ans.has_ipv4 = ans.has_ipv6 = true;
+			ans.start = lease->start_real;
+			ans.leasetime = lease->leasetime;
+		} else {
+			ans.wg_errno = E_IP_UNAVAIL;
+		}
+
+		msglen = serialize_request_ip(false, buf, sizeof buf, &ans);
 		break;
 	default:
-		debug("Unknown command: %d\n", req->cmd);
+		debug("Unknown command: %d\n", con->req.cmd);
 		BUG();
 	}
 
-	if (ret)
-		return send_error(req, ret);
+	return send_message(con, (unsigned char *)buf, msglen);
+}
 
-	return send_message(req, buf, msglen);
+static void handle_client(struct wg_dynamic_connection *con)
+{
+	unsigned char buf[RECV_BUFSIZE + MAX_LINESIZE];
+	size_t rem = 0;
+	ssize_t ret;
+
+	while ((ret = handle_request(con->fd, &con->req, buf, &rem)) > 0) {
+		if (!send_response(con)) {
+			close_connection(con);
+			break;
+		}
+
+		free_wg_dynamic_request(&con->req);
+	}
+
+	if (ret < 0) {
+		size_t len = 0;
+		uint32_t err = E_INVALID_REQ;
+		if (-ret == EPROTONOSUPPORT)
+			err = E_UNSUPP_PROTO;
+
+		print_to_buf((char *)buf, sizeof buf, &len,
+			     "errno=%u\nerrmsg=%s\n\n", err,
+			     WG_DYNAMIC_ERR[err]);
+		send_message(con, buf, len);
+		close_connection(con);
+	}
 }
 
 static void setup_sockets()
@@ -394,10 +426,10 @@ static void cleanup()
 		close(epollfd);
 
 	for (int i = 0; i < MAX_CONNECTIONS; ++i) {
-		if (requests[i].fd < 0)
+		if (connections[i].fd < 0)
 			continue;
 
-		close_connection(&requests[i]);
+		close_connection(&connections[i]);
 	}
 }
 
@@ -435,7 +467,7 @@ static void setup()
 	allowedips_ht = kh_init(allowedht);
 
 	for (int i = 0; i < MAX_CONNECTIONS; ++i)
-		requests[i].fd = -1;
+		connections[i].fd = -1;
 
 	if (atexit(cleanup))
 		die("Failed to set exit function\n");
@@ -462,20 +494,19 @@ static int get_avail_request()
 		if (nfds >= MAX_CONNECTIONS)
 			return -1;
 
-		if (requests[nfds].fd < 0)
+		if (connections[nfds].fd < 0)
 			return nfds;
 	}
 }
 
-static void accept_incoming(int sockfd, int epollfd,
-			    struct wg_dynamic_request *requests)
+static void accept_incoming()
 {
 	int n, fd;
 	struct epoll_event ev;
 
 	while ((n = get_avail_request()) >= 0) {
-		fd = accept_connection(sockfd, &requests[n].pubkey,
-				       &requests[n].lladdr);
+		fd = accept_connection(&connections[n].pubkey,
+				       &connections[n].lladdr);
 		if (fd < 0) {
 			if (fd == -ENOENT) {
 				debug("Failed to match IP to pubkey\n");
@@ -490,20 +521,20 @@ static void accept_incoming(int sockfd, int epollfd,
 		}
 
 		ev.events = EPOLLIN | EPOLLET;
-		ev.data.ptr = &requests[n];
+		ev.data.ptr = &connections[n];
 		if (epoll_ctl(epollfd, EPOLL_CTL_ADD, fd, &ev) == -1)
 			fatal("epoll_ctl()");
 
-		requests[n].fd = fd;
+		connections[n].fd = fd;
 	}
 }
 
 static void handle_event(void *ptr, uint32_t events)
 {
-	struct wg_dynamic_request *req;
+	struct wg_dynamic_connection *con;
 
 	if (ptr == &sockfd) {
-		accept_incoming(sockfd, epollfd, requests);
+		accept_incoming();
 		return;
 	}
 
@@ -512,15 +543,14 @@ static void handle_event(void *ptr, uint32_t events)
 		return;
 	}
 
-	req = (struct wg_dynamic_request *)ptr;
+	con = (struct wg_dynamic_connection *)ptr;
 	if (events & EPOLLIN) {
-		if (handle_request(req, send_response, send_error))
-			close_connection(req);
+		handle_client(con);
 	}
 
 	if (events & EPOLLOUT) {
-		if (send_message(req, req->buf, req->buflen))
-			close_connection(req);
+		if (!send_message(con, con->outbuf, con->buflen))
+			close_connection(con);
 	}
 }
 

@@ -20,6 +20,60 @@
 #include "common.h"
 #include "dbg.h"
 
+union kvalues {
+	uint32_t u32;
+	struct wg_combined_ip ip;
+	char errmsg[256];
+};
+
+static void request_ip(enum wg_dynamic_key key, union kvalues kv, void **dest)
+{
+	struct wg_combined_ip *ip = &kv.ip;
+	struct wg_dynamic_request_ip *r = (struct wg_dynamic_request_ip *)*dest;
+
+	switch (key) {
+	case WGKEY_REQUEST_IP:
+		BUG_ON(*dest);
+		*dest = calloc(1, sizeof(struct wg_dynamic_request_ip));
+		if (!*dest)
+			fatal("calloc()");
+
+		break;
+	case WGKEY_IPV4:
+		memcpy(&r->ipv4, &ip->ip4, sizeof r->ipv4);
+		r->cidrv4 = ip->cidr;
+		r->has_ipv4 = true;
+		break;
+	case WGKEY_IPV6:
+		memcpy(&r->ipv6, &ip->ip6, sizeof r->ipv6);
+		r->cidrv6 = ip->cidr;
+		r->has_ipv6 = true;
+		break;
+	case WGKEY_LEASESTART:
+		r->start = kv.u32;
+		break;
+	case WGKEY_LEASETIME:
+		r->leasetime = kv.u32;
+		break;
+	case WGKEY_ERRNO:
+		r->wg_errno = kv.u32;
+		break;
+	case WGKEY_ERRMSG:
+		r->errmsg = strdup(kv.errmsg);
+		break;
+	default:
+		debug("Invalid key %d, aborting\n", key);
+		BUG();
+	}
+}
+
+static void (*const deserialize_fptr[])(enum wg_dynamic_key key,
+					union kvalues kv, void **dest) = {
+	NULL,
+	NULL,
+	request_ip,
+};
+
 static bool parse_ip_cidr(struct wg_combined_ip *ip, char *value)
 {
 	uintmax_t res;
@@ -50,281 +104,253 @@ static bool parse_ip_cidr(struct wg_combined_ip *ip, char *value)
 	return true;
 }
 
-static struct wg_dynamic_attr *parse_value(enum wg_dynamic_key key, char *value)
+static bool parse_value(enum wg_dynamic_key key, char *str, union kvalues *kv)
 {
-	struct wg_dynamic_attr *attr;
-	size_t len;
 	char *endptr;
 	uintmax_t uresult;
-	union {
-		uint32_t uint32;
-		char errmsg[72];
-		struct wg_combined_ip ip;
-	} data = { 0 };
+	struct wg_combined_ip *ip;
 
 	switch (key) {
 	case WGKEY_IPV4:
-		len = sizeof data.ip;
-		data.ip.family = AF_INET;
-		if (!parse_ip_cidr(&data.ip, value))
-			return NULL;
-
-		break;
 	case WGKEY_IPV6:
-		len = sizeof data.ip;
-		data.ip.family = AF_INET6;
-		if (!parse_ip_cidr(&data.ip, value))
-			return NULL;
+		ip = &kv->ip;
+		ip->family = (key == WGKEY_IPV4) ? AF_INET : AF_INET6;
+		if (!parse_ip_cidr(ip, str))
+			return false;
 
 		break;
+	case WGKEY_REQUEST_IP:
 	case WGKEY_LEASESTART:
 	case WGKEY_LEASETIME:
 	case WGKEY_ERRNO:
-		len = sizeof data.uint32;
-		uresult = strtoumax(value, &endptr, 10);
+		uresult = strtoumax(str, &endptr, 10);
 		if (uresult > UINT32_MAX || *endptr != '\0')
-			return NULL;
-		data.uint32 = (uint32_t)uresult;
+			return false;
 
+		kv->u32 = (uint32_t)uresult;
 		break;
 	case WGKEY_ERRMSG:
-		strncpy(data.errmsg, value, sizeof data.errmsg - 1);
-		data.errmsg[sizeof data.errmsg - 1] = '\0';
-		len = MIN(sizeof data.errmsg,
-			  strlen(value) + 1); /* Copying the NUL byte too. */
-
+		strncpy(kv->errmsg, str, sizeof kv->errmsg);
+		kv->errmsg[sizeof kv->errmsg - 1] = '\0';
 		break;
 	default:
 		debug("Invalid key %d, aborting\n", key);
 		BUG();
 	}
 
-	attr = malloc(sizeof(struct wg_dynamic_attr) + len);
-	if (!attr)
-		fatal("malloc()");
-
-	attr->len = len;
-	attr->key = key;
-	attr->next = NULL;
-	memcpy(&attr->value, &data, len);
-
-	return attr;
+	return true;
 }
 
 static enum wg_dynamic_key parse_key(char *key)
 {
-	for (enum wg_dynamic_key e = 1; e < ARRAY_SIZE(WG_DYNAMIC_KEY); ++e)
+	for (enum wg_dynamic_key e = 2; e < ARRAY_SIZE(WG_DYNAMIC_KEY); ++e)
 		if (!strcmp(key, WG_DYNAMIC_KEY[e]))
 			return e;
 
 	return WGKEY_UNKNOWN;
 }
 
-/* Consumes one full line from buf, or up to MAX_LINESIZE-1 bytes if no newline
- * character was found.
- * If req != NULL then we expect to parse a command and will set cmd and version
- * of req accordingly, while *attr will be set to NULL.
- * Otherwise we expect to parse a normal key=value pair, that will be stored
- * in a newly allocated wg_dynamic_attr, pointed to by *attr.
+/* Consumes one full line from buf, or up to MAX_LINESIZE bytes if no newline
+ * character was found. If less then MAX_LINESIZE bytes are available, a new
+ * buffer will be allocated and req->buf and req->len set accordingly.
  *
  * Return values:
  *   > 0 : Amount of bytes consumed (<= MAX_LINESIZE)
+ *   = 0 : Consumed len bytes; need more for a full line
  *   < 0 : Error
- *   = 0 : End of message
  */
 static ssize_t parse_line(unsigned char *buf, size_t len,
-			  struct wg_dynamic_attr **attr,
-			  struct wg_dynamic_request *req)
+			  struct wg_dynamic_request *req,
+			  enum wg_dynamic_key *key, union kvalues *kv)
 {
 	unsigned char *line_end, *key_end;
-	enum wg_dynamic_key key;
 	ssize_t line_len;
-	char *endptr;
-	uintmax_t res;
 
-	line_end = memchr(buf, '\n', len > MAX_LINESIZE ? MAX_LINESIZE : len);
+	line_end = memchr(buf, '\n', MIN(len, MAX_LINESIZE));
 	if (!line_end) {
 		if (len >= MAX_LINESIZE)
 			return -E2BIG;
 
-		*attr = malloc(sizeof(struct wg_dynamic_attr) + len);
-		if (!*attr)
+		req->len = len;
+		req->buf = malloc(len);
+		if (!req->buf)
 			fatal("malloc()");
 
-		(*attr)->key = WGKEY_INCOMPLETE;
-		(*attr)->len = len;
-		(*attr)->next = NULL;
-		memcpy((*attr)->value, buf, len);
-
-		return len;
+		memcpy(req->buf, buf, len);
+		return 0;
 	}
 
-	if (line_end == buf)
-		return 0; /* \n\n - end of message */
+	if (line_end == buf) {
+		*key = WGKEY_EOMSG;
+		return 1;
+	}
 
 	*line_end = '\0';
 	line_len = line_end - buf + 1;
 
 	key_end = memchr(buf, '=', line_len - 1);
-	if (!key_end)
+	if (!key_end || key_end == buf)
 		return -EINVAL;
 
 	*key_end = '\0';
-	key = parse_key((char *)buf);
-	if (key == WGKEY_UNKNOWN)
-		return -ENOENT;
+	*key = parse_key((char *)buf);
+	if (*key == WGKEY_UNKNOWN)
+		return line_len;
 
-	if (req) {
-		if (key >= WGKEY_ENDCMD)
-			return -ENOENT;
-
-		*attr = NULL;
-		res = strtoumax((char *)key_end + 1, &endptr, 10);
-
-		if (res > UINT32_MAX || *endptr != '\0')
-			return -EINVAL;
-
-		req->cmd = key;
-		req->version = (uint32_t)res;
-
-		if (req->version != 1)
-			return -EPROTONOSUPPORT;
-	} else {
-		if (key <= WGKEY_ENDCMD)
-			return -ENOENT;
-
-		*attr = parse_value(key, (char *)key_end + 1);
-		if (!*attr)
-			return -EINVAL;
-	}
+	if (!parse_value(*key, (char *)key_end + 1, kv))
+		return -EINVAL;
 
 	return line_len;
 }
 
-static int parse_request(struct wg_dynamic_request *req, unsigned char *buf,
-			 size_t len)
+static ssize_t parse_request(struct wg_dynamic_request *req, unsigned char *buf,
+			     size_t len)
 {
-	struct wg_dynamic_attr *attr;
-	size_t offset = 0;
-	ssize_t ret;
+	ssize_t ret, offset = 0;
+	size_t addlen = 0;
+	enum wg_dynamic_key key;
+	union kvalues kv;
+	void (*deserialize)(enum wg_dynamic_key key, union kvalues kv,
+			    void **dest);
 
 	if (memchr(buf, '\0', len))
 		return -EINVAL; /* don't allow null bytes */
 
-	if (req->last && req->last->key == WGKEY_INCOMPLETE) {
-		len += req->last->len;
+	if (req->len > 0 && req->buf) {
+		len += req->len;
 
-		memmove(buf + req->last->len, buf, len);
-		memcpy(buf, req->last->value, req->last->len);
-		free(req->last);
-
-		if (req->first == req->last) {
-			req->first = NULL;
-			req->last = NULL;
-		} else {
-			attr = req->first;
-			while (attr->next != req->last)
-				attr = attr->next;
-
-			attr->next = NULL;
-			req->last = attr;
-		}
+		memmove(buf + req->len, buf, len);
+		memcpy(buf, req->buf, req->len);
+		addlen = req->len;
+		free(req->buf);
+		req->buf = NULL;
+		req->len = 0;
 	}
 
-	while (len > 0) {
-		ret = parse_line(buf + offset, len, &attr,
-				 req->cmd == WGKEY_UNKNOWN ? req : NULL);
+	if (req->cmd == WGKEY_UNKNOWN) {
+		ret = parse_line(buf, len, req, &req->cmd, &kv);
 		if (ret <= 0)
-			return ret; /* either error or message complete */
+			return ret;
+
+		req->version = kv.u32;
+		if (req->cmd >= WGKEY_ENDCMD || req->cmd <= WGKEY_EOMSG ||
+		    req->version != 1)
+			return -EPROTONOSUPPORT;
 
 		len -= ret;
 		offset += ret;
-		if (!attr)
-			continue;
 
-		if (!req->first)
-			req->first = attr;
-		else
-			req->last->next = attr;
-
-		req->last = attr;
+		deserialize = deserialize_fptr[req->cmd];
+		deserialize(req->cmd, kv, &req->result);
+	} else {
+		deserialize = deserialize_fptr[req->cmd];
 	}
+
+	while (len > 0) {
+		ret = parse_line(buf + offset, len, req, &key, &kv);
+		if (ret <= 0)
+			return ret;
+
+		len -= ret;
+		offset += ret;
+
+		if (key == WGKEY_EOMSG)
+			return offset - addlen;
+		else if (key == WGKEY_UNKNOWN)
+			continue;
+		else if (key <= WGKEY_ENDCMD)
+			return -EINVAL;
+
+		deserialize(key, kv, &req->result);
+	}
+
+	return 0;
+}
+
+int handle_request(int fd, struct wg_dynamic_request *req,
+		   unsigned char buf[RECV_BUFSIZE + MAX_LINESIZE],
+		   size_t *remaining)
+{
+	ssize_t bytes, processed;
+
+	do {
+		if (*remaining > 0)
+			bytes = *remaining;
+		else
+			bytes = read(fd, buf, RECV_BUFSIZE);
+
+		if (bytes < 0) {
+			if (errno == EWOULDBLOCK || errno == EAGAIN ||
+			    errno == EINTR)
+				return 0;
+
+			debug("Reading from socket %d failed: %s\n", fd,
+			      strerror(errno));
+			return -1;
+		} else if (bytes == 0) {
+			return -1;
+		}
+
+		processed = parse_request(req, buf, bytes);
+		if (processed < 0)
+			return processed; /* Parsing error */
+	} while (processed == 0);
+
+	*remaining = bytes - processed;
+	memmove(buf, buf + processed, *remaining);
 
 	return 1;
 }
 
-bool handle_request(struct wg_dynamic_request *req,
-		    bool (*success)(struct wg_dynamic_request *),
-		    bool (*error)(struct wg_dynamic_request *, int))
+void free_wg_dynamic_request(struct wg_dynamic_request *req)
 {
-	ssize_t bytes;
-	int ret;
-	unsigned char buf[RECV_BUFSIZE + MAX_LINESIZE];
+	BUG_ON(req->buf || req->len);
 
-	while (1) {
-		bytes = read(req->fd, buf, RECV_BUFSIZE);
-		if (bytes < 0) {
-			if (errno == EWOULDBLOCK || errno == EAGAIN)
-				break;
-
-			// TODO: handle EINTR
-
-			debug("Reading from socket %d failed: %s\n", req->fd,
-			      strerror(errno));
-			return true;
-		} else if (bytes == 0) {
-			debug("Peer disconnected unexpectedly\n");
-			return true;
-		}
-
-		ret = parse_request(req, buf, bytes);
-		if (ret < 0)
-			return error(req, -ret);
-		else if (ret == 0)
-			return success(req);
+	req->cmd = WGKEY_UNKNOWN;
+	req->version = 0;
+	if (req->result) {
+		free(((struct wg_dynamic_request_ip *)req->result)->errmsg);
+		free(req->result);
+		req->result = NULL;
 	}
-
-	return false;
 }
 
-bool send_message(struct wg_dynamic_request *req, const void *buf, size_t len)
+size_t serialize_request_ip(bool send, char *buf, size_t len,
+			    struct wg_dynamic_request_ip *rip)
 {
-	size_t offset = 0;
+	size_t off = 0;
+	char addrbuf[INET6_ADDRSTRLEN];
 
-	while (1) {
-		ssize_t written = write(req->fd, buf + offset, len - offset);
-		if (written < 0) {
-			if (errno == EWOULDBLOCK || errno == EAGAIN)
-				break;
+	if (send)
+		print_to_buf(buf, len, &off, "request_ip=1\n");
 
-			// TODO: handle EINTR
+	if (rip->has_ipv4) {
+		if (!inet_ntop(AF_INET, &rip->ipv4, addrbuf, sizeof addrbuf))
+			fatal("inet_ntop()");
 
-			debug("Writing to socket %d failed: %s\n", req->fd,
-			      strerror(errno));
-			return true;
-		}
-
-		offset += written;
-		if (offset == len)
-			return true;
+		print_to_buf(buf, len, &off, "ipv4=%s/32\n", addrbuf);
 	}
 
-	debug("Socket %d blocking on write with %lu bytes left, postponing\n",
-	      req->fd, len - offset);
+	if (rip->has_ipv6) {
+		if (!inet_ntop(AF_INET6, &rip->ipv6, addrbuf, sizeof addrbuf))
+			fatal("inet_ntop()");
 
-	if (!req->buf) {
-		req->buflen = len - offset;
-		req->buf = malloc(req->buflen);
-		if (!req->buf)
-			fatal("malloc()");
-
-		memcpy(req->buf, buf + offset, req->buflen);
-	} else {
-		req->buflen = len - offset;
-		memmove(req->buf, buf + offset, req->buflen);
+		print_to_buf(buf, len, &off, "ipv6=%s/128\n", addrbuf);
 	}
 
-	return false;
+	if (rip->start && rip->leasetime)
+		print_to_buf(buf, len, &off, "leasestart=%u\nleasetime=%u\n",
+			     rip->start, rip->leasetime);
+
+	if (rip->errmsg)
+		print_to_buf(buf, len, &off, "errmsg=%s\n", rip->errmsg);
+
+	if (!send)
+		print_to_buf(buf, len, &off, "errno=%u\n", rip->wg_errno);
+
+	print_to_buf(buf, len, &off, "\n");
+
+	return off;
 }
 
 void print_to_buf(char *buf, size_t bufsize, size_t *offset, char *fmt, ...)
@@ -351,29 +377,6 @@ uint32_t current_time()
 	if (clock_gettime(CLOCK_REALTIME, &tp))
 		fatal("clock_gettime(CLOCK_REALTIME)");
 	return tp.tv_sec;
-}
-
-void close_connection(struct wg_dynamic_request *req)
-{
-	struct wg_dynamic_attr *prev, *cur = req->first;
-
-	if (close(req->fd))
-		debug("Failed to close socket\n");
-
-	while (cur) {
-		prev = cur;
-		cur = cur->next;
-		free(prev);
-	}
-
-	req->cmd = WGKEY_UNKNOWN;
-	req->version = 0;
-	req->fd = -1;
-	free(req->buf);
-	req->buf = NULL;
-	req->buflen = 0;
-	req->first = NULL;
-	req->last = NULL;
 }
 
 bool is_link_local(unsigned char *addr)
