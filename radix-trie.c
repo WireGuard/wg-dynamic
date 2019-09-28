@@ -377,35 +377,35 @@ static int remove_node(struct radix_node *trie, const uint8_t *key,
 	return 0;
 }
 
-static void totalip_inc(struct ip_pool *ipp, uint8_t bits, uint8_t val)
+static void totalip_inc(struct ipns *ns, uint8_t bits, uint8_t val)
 {
 	if (bits == 32) {
 		BUG_ON(val >= 32);
-		ipp->total_ipv4 += 1ULL << val;
+		ns->total_ipv4 += 1ULL << val;
 	} else if (bits == 128) {
-		uint64_t tmp = ipp->totall_ipv6;
+		uint64_t tmp = ns->totall_ipv6;
 		BUG_ON(val > 64);
-		ipp->totall_ipv6 += (val == 64) ? 0 : 1ULL << val;
-		if (ipp->totall_ipv6 <= tmp)
-			++ipp->totalh_ipv6;
+		ns->totall_ipv6 += (val == 64) ? 0 : 1ULL << val;
+		if (ns->totall_ipv6 <= tmp)
+			++ns->totalh_ipv6;
 	}
 }
 
-static void totalip_dec(struct ip_pool *ipp, uint8_t bits, uint8_t val)
+static void totalip_dec(struct ipns *ns, uint8_t bits, uint8_t val)
 {
 	if (bits == 32) {
 		BUG_ON(val >= 32);
-		ipp->total_ipv4 -= 1ULL << val;
+		ns->total_ipv4 -= 1ULL << val;
 	} else if (bits == 128) {
-		uint64_t tmp = ipp->totall_ipv6;
+		uint64_t tmp = ns->totall_ipv6;
 		BUG_ON(val > 64);
-		ipp->totall_ipv6 -= (val == 64) ? 0 : 1ULL << val;
-		if (ipp->totall_ipv6 >= tmp)
-			--ipp->totalh_ipv6;
+		ns->totall_ipv6 -= (val == 64) ? 0 : 1ULL << val;
+		if (ns->totall_ipv6 >= tmp)
+			--ns->totalh_ipv6;
 	}
 }
 
-static int ipp_addpool(struct ip_pool *ipp, struct radix_pool **pool,
+static int ipp_addpool(struct ipns *ns, struct radix_pool **pool,
 		       struct radix_node **root, uint8_t bits,
 		       const uint8_t *key, uint8_t cidr)
 {
@@ -421,7 +421,7 @@ static int ipp_addpool(struct ip_pool *ipp, struct radix_pool **pool,
 				shadowed = true;
 			} else if (cidr < node->cidr && !(*pool)->shadowed) {
 				(*pool)->shadowed = true;
-				totalip_dec(ipp, bits, bits - cidr);
+				totalip_dec(ns, bits, bits - cidr);
 			} else {
 				return -1;
 			}
@@ -439,7 +439,7 @@ static int ipp_addpool(struct ip_pool *ipp, struct radix_pool **pool,
 	}
 
 	if (!shadowed)
-		totalip_inc(ipp, bits, bits - cidr);
+		totalip_inc(ns, bits, bits - cidr);
 
 	newpool = malloc(sizeof *newpool);
 	if (!newpool)
@@ -505,94 +505,94 @@ static void debug_print_trie(struct radix_node *root, uint8_t bits)
 	debug_print_trie(root->bit[1], bits);
 }
 
-void debug_print_trie_v4(struct ip_pool *pool)
+void debug_print_trie_v4(struct ipns *ns)
 {
-	debug_print_trie(pool->ip4_root, 32);
+	debug_print_trie(ns->ip4_root, 32);
 }
 
-void debug_print_trie_v6(struct ip_pool *pool)
+void debug_print_trie_v6(struct ipns *ns)
 {
-	debug_print_trie(pool->ip6_root, 128);
+	debug_print_trie(ns->ip6_root, 128);
 }
 #endif
 
-void ipp_init(struct ip_pool *pool)
+void ipp_init(struct ipns *ns)
 {
-	pool->ip4_root = pool->ip6_root = NULL;
-	pool->ip4_pool = pool->ip6_pool = NULL;
-	pool->totall_ipv6 = pool->totalh_ipv6 = pool->total_ipv4 = 0;
+	ns->ip4_root = ns->ip6_root = NULL;
+	ns->ip4_pools = ns->ip6_pools = NULL;
+	ns->totall_ipv6 = ns->totalh_ipv6 = ns->total_ipv4 = 0;
 }
 
-void ipp_free(struct ip_pool *pool)
+void ipp_free(struct ipns *ns)
 {
 	struct radix_pool *next;
 
-	radix_free_nodes(pool->ip4_root);
-	radix_free_nodes(pool->ip6_root);
+	radix_free_nodes(ns->ip4_root);
+	radix_free_nodes(ns->ip6_root);
 
-	for (struct radix_pool *cur = pool->ip4_pool; cur; cur = next) {
+	for (struct radix_pool *cur = ns->ip4_pools; cur; cur = next) {
 		next = cur->next;
 		free(cur);
 	}
 
-	for (struct radix_pool *cur = pool->ip6_pool; cur; cur = next) {
+	for (struct radix_pool *cur = ns->ip6_pools; cur; cur = next) {
 		next = cur->next;
 		free(cur);
 	}
 }
 
-int ipp_add_v4(struct ip_pool *pool, const struct in_addr *ip, uint8_t cidr)
+int ipp_add_v4(struct ipns *ns, const struct in_addr *ip, uint8_t cidr)
 {
-	int ret = insert_v4(&pool->ip4_root, ip, cidr);
+	int ret = insert_v4(&ns->ip4_root, ip, cidr);
 	if (!ret)
-		--pool->total_ipv4;
+		--ns->total_ipv4;
 
 	return ret;
 }
 
-int ipp_add_v6(struct ip_pool *pool, const struct in6_addr *ip, uint8_t cidr)
+int ipp_add_v6(struct ipns *ns, const struct in6_addr *ip, uint8_t cidr)
 {
-	int ret = insert_v6(&pool->ip6_root, ip, cidr);
+	int ret = insert_v6(&ns->ip6_root, ip, cidr);
 	if (!ret) {
-		if (pool->totall_ipv6 == 0)
-			--pool->totalh_ipv6;
+		if (ns->totall_ipv6 == 0)
+			--ns->totalh_ipv6;
 
-		--pool->totall_ipv6;
+		--ns->totall_ipv6;
 	}
 
 	return ret;
 }
 
-int ipp_del_v4(struct ip_pool *pool, const struct in_addr *ip, uint8_t cidr)
+int ipp_del_v4(struct ipns *ns, const struct in_addr *ip, uint8_t cidr)
 {
 	uint8_t key[4] __aligned(__alignof(uint32_t));
 	int ret;
 
 	swap_endian(key, (const uint8_t *)ip, 32);
-	ret = remove_node(pool->ip4_root, key, cidr);
+	ret = remove_node(ns->ip4_root, key, cidr);
 	if (!ret)
-		++pool->total_ipv4;
+		++ns->total_ipv4;
 
 	return ret;
 }
 
-int ipp_del_v6(struct ip_pool *pool, const struct in6_addr *ip, uint8_t cidr)
+int ipp_del_v6(struct ipns *ns, const struct in6_addr *ip, uint8_t cidr)
 {
 	uint8_t key[16] __aligned(__alignof(uint64_t));
 	int ret;
 
 	swap_endian(key, (const uint8_t *)ip, 128);
-	ret = remove_node(pool->ip6_root, key, cidr);
+	ret = remove_node(ns->ip6_root, key, cidr);
 	if (!ret) {
-		++pool->totall_ipv6;
-		if (pool->totall_ipv6 == 0)
-			++pool->totalh_ipv6;
+		++ns->totall_ipv6;
+		if (ns->totall_ipv6 == 0)
+			++ns->totalh_ipv6;
 	}
 
 	return ret;
 }
 
-int ipp_addpool_v4(struct ip_pool *ipp, const struct in_addr *ip, uint8_t cidr)
+int ipp_addpool_v4(struct ipns *ns, const struct in_addr *ip, uint8_t cidr)
 {
 	uint8_t key[4] __aligned(__alignof(uint32_t));
 
@@ -600,10 +600,10 @@ int ipp_addpool_v4(struct ip_pool *ipp, const struct in_addr *ip, uint8_t cidr)
 		return -1;
 
 	swap_endian(key, (const uint8_t *)ip, 32);
-	return ipp_addpool(ipp, &ipp->ip4_pool, &ipp->ip4_root, 32, key, cidr);
+	return ipp_addpool(ns, &ns->ip4_pools, &ns->ip4_root, 32, key, cidr);
 }
 
-int ipp_addpool_v6(struct ip_pool *ipp, const struct in6_addr *ip, uint8_t cidr)
+int ipp_addpool_v6(struct ipns *ns, const struct in6_addr *ip, uint8_t cidr)
 {
 	uint8_t key[16] __aligned(__alignof(uint64_t));
 
@@ -611,26 +611,26 @@ int ipp_addpool_v6(struct ip_pool *ipp, const struct in6_addr *ip, uint8_t cidr)
 		return -1;
 
 	swap_endian(key, (const uint8_t *)ip, 128);
-	return ipp_addpool(ipp, &ipp->ip6_pool, &ipp->ip6_root, 128, key, cidr);
+	return ipp_addpool(ns, &ns->ip6_pools, &ns->ip6_root, 128, key, cidr);
 }
 
 /* TODO: implement */
-int ipp_removepool_v4(struct ip_pool *pool, const struct in_addr *ip)
+int ipp_removepool_v4(struct ipns *ns, const struct in_addr *ip)
 {
 	return 0;
 }
 
 /* TODO: implement */
-int ipp_removepool_v6(struct ip_pool *pool, const struct in6_addr *ip)
+int ipp_removepool_v6(struct ipns *ns, const struct in6_addr *ip)
 {
 	return 0;
 }
 
-void ipp_addnth_v4(struct ip_pool *pool, struct in_addr *dest, uint32_t index)
+void ipp_addnth_v4(struct ipns *ns, struct in_addr *dest, uint32_t index)
 {
-	struct radix_pool *current = pool->ip4_pool;
+	struct radix_pool *current = ns->ip4_pools;
 
-	for (current = pool->ip4_pool; current; current = current->next) {
+	for (current = ns->ip4_pools; current; current = current->next) {
 		if (current->shadowed)
 			continue;
 
@@ -643,13 +643,13 @@ void ipp_addnth_v4(struct ip_pool *pool, struct in_addr *dest, uint32_t index)
 	BUG_ON(!current);
 
 	add_nth(current->node, 32, index, (uint8_t *)&dest->s_addr);
-	--pool->total_ipv4;
+	--ns->total_ipv4;
 }
 
-void ipp_addnth_v6(struct ip_pool *pool, struct in6_addr *dest,
-		   uint32_t index_low, uint64_t index_high)
+void ipp_addnth_v6(struct ipns *ns, struct in6_addr *dest, uint32_t index_low,
+		   uint64_t index_high)
 {
-	struct radix_pool *current = pool->ip6_pool;
+	struct radix_pool *current = ns->ip6_pools;
 	uint64_t tmp;
 
 	while (current) {
@@ -676,8 +676,8 @@ void ipp_addnth_v6(struct ip_pool *pool, struct in6_addr *dest,
 	BUG_ON(!current || index_high);
 
 	add_nth(current->node, 128, index_low, (uint8_t *)&dest->s6_addr);
-	if (pool->totall_ipv6 == 0)
-		--pool->totalh_ipv6;
+	if (ns->totall_ipv6 == 0)
+		--ns->totalh_ipv6;
 
-	--pool->totall_ipv6;
+	--ns->totall_ipv6;
 }
