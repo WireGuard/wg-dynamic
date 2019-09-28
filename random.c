@@ -68,24 +68,27 @@ get_random_bytes(uint8_t *out, size_t len)
 	return i == len;
 }
 
-uint64_t random_bounded(uint64_t bound)
+uint64_t random_u64()
 {
 	uint64_t ret;
+	if (!get_random_bytes((uint8_t *)&ret, sizeof(ret)))
+		fatal("get_random_bytes()");
 
-	if (bound == 0)
+	return ret;
+}
+
+/* Returns a random number [0, bound) (exclusive) */
+uint64_t random_bounded(uint64_t bound)
+{
+	uint64_t ret, max_mod_bound;
+
+	if (bound < 2)
 		return 0;
 
-	if (bound == 1) {
-		if (!get_random_bytes((uint8_t *)&ret, sizeof(ret)))
-			fatal("get_random_bytes()");
-		return (ret > 0x7FFFFFFFFFFFFFFF) ? 1 : 0;
-	}
-
-	const uint64_t max_mod_bound = (1 + ~bound) % bound;
+	max_mod_bound = (1 + ~bound) % bound;
 
 	do {
-		if (!get_random_bytes((uint8_t *)&ret, sizeof(ret)))
-			fatal("get_random_bytes()");
+		ret = random_u64();
 	} while (ret < max_mod_bound);
 
 	return ret % bound;

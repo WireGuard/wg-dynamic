@@ -8,6 +8,7 @@
 
 #include <stdint.h>
 
+uint64_t random_u64();
 uint64_t random_bounded(uint64_t bound);
 
 #endif

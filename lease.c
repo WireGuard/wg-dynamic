@@ -237,7 +237,7 @@ struct wg_dynamic_lease *set_lease(wg_key pubkey, uint32_t leasetime,
 			debug("IPv4 pool empty\n");
 			memset(&lease->ipv4, 0, sizeof(lease->ipv4));
 		} else {
-			uint32_t index = random_bounded(pool.total_ipv4 - 1);
+			uint32_t index = random_bounded(pool.total_ipv4);
 			debug("new_lease(v4): %u of %u\n", index,
 			      pool.total_ipv4);
 			ipp_addnth_v4(&pool, &lease->ipv4, index);
@@ -262,10 +262,10 @@ struct wg_dynamic_lease *set_lease(wg_key pubkey, uint32_t leasetime,
 			uint64_t index_l;
 			uint32_t index_h;
 			if (pool.totalh_ipv6 > 0) {
-				index_l = random_bounded(UINT64_MAX);
-				index_h = random_bounded(pool.totalh_ipv6 - 1);
+				index_l = random_u64();
+				index_h = random_bounded(pool.totalh_ipv6);
 			} else {
-				index_l = random_bounded(pool.totall_ipv6 - 1);
+				index_l = random_bounded(pool.totall_ipv6);
 				index_h = 0;
 			}
 
