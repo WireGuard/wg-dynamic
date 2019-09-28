@@ -28,7 +28,7 @@
 
 static const char *devname = NULL;
 static int ifindex = 0;
-static struct ip_pool pool;
+static struct ipns ipns;
 static time_t gexpires = TIME_T_MAX;
 static bool synchronized;
 
@@ -67,7 +67,7 @@ void leases_init(const char *device_name, int interface_index, char *fname,
 
 	synchronized = false;
 	leases_ht = kh_init(leaseht);
-	ipp_init(&pool);
+	ipp_init(&ipns);
 
 	nlh = mnl_nlmsg_put_header(buf);
 	nlh->nlmsg_type = RTM_GETROUTE;
@@ -94,7 +94,7 @@ void leases_free()
 	}
 	kh_destroy(leaseht, leases_ht);
 
-	ipp_free(&pool);
+	ipp_free(&ipns);
 }
 
 struct allowedips_update {
@@ -219,7 +219,7 @@ struct wg_dynamic_lease *set_lease(wg_key pubkey, uint32_t leasetime,
 	if (lease->ipv4.s_addr &&
 	    (delete_ipv4 ||
 	     (ipv4 && memcmp(&lease->ipv4, ipv4, sizeof(*ipv4))))) {
-		if (ipp_del_v4(&pool, &lease->ipv4, 32))
+		if (ipp_del_v4(&ipns, &lease->ipv4, 32))
 			die("ipp_del_v4()\n");
 		memset(&lease->ipv4, 0, sizeof(lease->ipv4));
 	}
@@ -227,26 +227,26 @@ struct wg_dynamic_lease *set_lease(wg_key pubkey, uint32_t leasetime,
 	if (!IN6_IS_ADDR_UNSPECIFIED(&lease->ipv6) &&
 	    (delete_ipv6 ||
 	     (ipv6 && memcmp(&lease->ipv6, ipv6, sizeof(*ipv6))))) {
-		if (ipp_del_v6(&pool, &lease->ipv6, 128))
+		if (ipp_del_v6(&ipns, &lease->ipv6, 128))
 			die("ipp_del_v6()\n");
 		memset(&lease->ipv6, 0, sizeof(lease->ipv6));
 	}
 
 	if (!ipv4) { /* Wants random IPv4 address? */
-		if (!pool.total_ipv4) {
+		if (!ipns.total_ipv4) {
 			debug("IPv4 pool empty\n");
 			memset(&lease->ipv4, 0, sizeof(lease->ipv4));
 		} else {
-			uint32_t index = random_bounded(pool.total_ipv4);
+			uint32_t index = random_bounded(ipns.total_ipv4);
 			debug("new_lease(v4): %u of %u\n", index,
-			      pool.total_ipv4);
-			ipp_addnth_v4(&pool, &lease->ipv4, index);
+			      ipns.total_ipv4);
+			ipp_addnth_v4(&ipns, &lease->ipv4, index);
 		}
 	} else if (ipv4->s_addr) {
 		if (!memcmp(&lease->ipv4, ipv4, sizeof(*ipv4))) {
 			debug("extending(v4)\n");
 		} else {
-			if (!ipp_add_v4(&pool, ipv4, 32)) {
+			if (!ipp_add_v4(&ipns, ipv4, 32)) {
 				lease->ipv4 = *ipv4;
 			} else {
 				memset(&lease->ipv4, 0, sizeof(lease->ipv4));
@@ -255,29 +255,29 @@ struct wg_dynamic_lease *set_lease(wg_key pubkey, uint32_t leasetime,
 	}
 
 	if (!ipv6) { /* Wants random IPv6 address? */
-		if (!pool.totalh_ipv6 && !pool.totall_ipv6) {
+		if (!ipns.totalh_ipv6 && !ipns.totall_ipv6) {
 			debug("IPv6 pool empty\n");
 			memset(&lease->ipv6, 0, sizeof(lease->ipv6));
 		} else {
 			uint64_t index_l;
 			uint32_t index_h;
-			if (pool.totalh_ipv6 > 0) {
+			if (ipns.totalh_ipv6 > 0) {
 				index_l = random_u64();
-				index_h = random_bounded(pool.totalh_ipv6);
+				index_h = random_bounded(ipns.totalh_ipv6);
 			} else {
-				index_l = random_bounded(pool.totall_ipv6);
+				index_l = random_bounded(ipns.totall_ipv6);
 				index_h = 0;
 			}
 
 			debug("new_lease(v6): %u:%ju of %u:%ju\n", index_h,
-			      index_l, pool.totalh_ipv6, pool.totall_ipv6);
-			ipp_addnth_v6(&pool, &lease->ipv6, index_l, index_h);
+			      index_l, ipns.totalh_ipv6, ipns.totall_ipv6);
+			ipp_addnth_v6(&ipns, &lease->ipv6, index_l, index_h);
 		}
 	} else if (!IN6_IS_ADDR_UNSPECIFIED(ipv6)) {
 		if (!memcmp(&lease->ipv6, ipv6, sizeof(*ipv6))) {
 			debug("extending(v6)\n");
 		} else {
-			if (!ipp_add_v6(&pool, ipv6, 128)) {
+			if (!ipp_add_v6(&ipns, ipv6, 128)) {
 				lease->ipv6 = *ipv6;
 			} else {
 				memset(&lease->ipv6, 0, sizeof(lease->ipv6));
@@ -342,10 +342,10 @@ int leases_refresh()
 		time_t expires = lease->start_mono + lease->leasetime;
 		if (cur_time >= expires) {
 			if (lease->ipv4.s_addr)
-				ipp_del_v4(&pool, &lease->ipv4, 32);
+				ipp_del_v4(&ipns, &lease->ipv4, 32);
 
 			if (!IN6_IS_ADDR_UNSPECIFIED(&lease->ipv6))
-				ipp_del_v6(&pool, &lease->ipv6, 128);
+				ipp_del_v6(&ipns, &lease->ipv6, 128);
 
 			memcpy(updates[i].peer_pubkey, kh_key(leases_ht, k),
 			       sizeof(wg_key));
@@ -458,18 +458,18 @@ static int process_nlpacket_cb(const struct nlmsghdr *nlh, void *data)
 
 	if (nlh->nlmsg_type == RTM_NEWROUTE) {
 		if (rm->rtm_family == AF_INET) {
-			if (ipp_addpool_v4(&pool, addr, rm->rtm_dst_len))
+			if (ipp_addpool_v4(&ipns, addr, rm->rtm_dst_len))
 				die("ipp_addpool_v4()\n");
 		} else if (rm->rtm_family == AF_INET6) {
-			if (ipp_addpool_v6(&pool, addr, rm->rtm_dst_len))
+			if (ipp_addpool_v6(&ipns, addr, rm->rtm_dst_len))
 				die("ipp_addpool_v6()\n");
 		}
 	} else if (nlh->nlmsg_type == RTM_DELROUTE) {
 		if (rm->rtm_family == AF_INET) {
-			if (ipp_removepool_v4(&pool, addr) && synchronized)
+			if (ipp_removepool_v4(&ipns, addr) && synchronized)
 				die("ipp_removepool_v4()\n");
 		} else if (rm->rtm_family == AF_INET6) {
-			if (ipp_removepool_v6(&pool, addr) && synchronized)
+			if (ipp_removepool_v6(&ipns, addr) && synchronized)
 				die("ipp_removepool_v6()\n");
 		}
 	}
