@@ -114,7 +114,7 @@ struct wg_dynamic_lease *new_lease(wg_key pubkey, uint32_t leasetime,
 
 	if (wants_ipv4) {
 		if (!ipv4) {
-			index = random_bounded(pool.total_ipv4 - 1);
+			index = random_bounded(pool.total_ipv4);
 			debug("new_lease(v4): %u of %u\n", index,
 			      pool.total_ipv4);
 
@@ -130,10 +130,10 @@ struct wg_dynamic_lease *new_lease(wg_key pubkey, uint32_t leasetime,
 	if (wants_ipv6) {
 		if (!ipv6) {
 			if (pool.totalh_ipv6 > 0) {
-				index_l = random_bounded(UINT64_MAX);
-				index_h = random_bounded(pool.totalh_ipv6 - 1);
+				index_l = random_u64();
+				index_h = random_bounded(pool.totalh_ipv6);
 			} else {
-				index_l = random_bounded(pool.totall_ipv6 - 1);
+				index_l = random_bounded(pool.totall_ipv6);
 				index_h = 0;
 			}
 
