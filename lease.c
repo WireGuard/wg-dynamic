@@ -203,8 +203,9 @@ bool extend_lease(struct wg_dynamic_lease *lease, uint32_t leasetime)
 	return false;
 }
 
-int leases_refresh()
+int leases_refresh(void (*update_cb)(wg_key *, int))
 {
+	wg_key updates[WG_DYNAMIC_LEASE_CHUNKSIZE] = { 0 };
 	time_t cur_time = get_monotonic_time();
 
 	if (cur_time < gexpires)
@@ -212,6 +213,7 @@ int leases_refresh()
 
 	gexpires = TIME_T_MAX;
 
+	int i = 0;
 	for (khint_t k = kh_begin(leases_ht); k != kh_end(leases_ht); ++k) {
 		if (!kh_exist(leases_ht, k))
 			continue;
@@ -228,6 +230,19 @@ int leases_refresh()
 				if (!IN6_IS_ADDR_UNSPECIFIED(ipv6))
 					ipp_del_v6(&pool, ipv6, 128);
 
+				memcpy(updates[i], kh_key(leases_ht, k), sizeof(wg_key));
+				{
+					wg_key_b64_string pubkey_asc;
+					wg_key_to_base64(pubkey_asc, updates[i]);
+					debug("Peer losing its lease: %s\n", pubkey_asc);
+				}
+				i++;
+				if (i == WG_DYNAMIC_LEASE_CHUNKSIZE) {
+					update_cb(updates, i);
+					i = 0;
+					memset(updates, 0, sizeof updates);
+				}
+
 				tmp = *pp;
 				*pp = (*pp)->next;
 				free(tmp);
@@ -238,6 +253,9 @@ int leases_refresh()
 				pp = &(*pp)->next;
 			}
 		}
+
+		if (i)
+			update_cb(updates, i);
 
 		if (!kh_val(leases_ht, k)) {
 			free((char *)kh_key(leases_ht, k));

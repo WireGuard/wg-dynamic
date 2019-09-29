@@ -294,6 +294,59 @@ static void add_allowed_ips(wg_key pubkey, struct in_addr *ipv4,
 		fatal("wg_set_device()");
 }
 
+/* TODO: have UPDATES contain {wg_key, ip4 and ip6} and remove only matching addrs */
+static void update_allowed_ips(wg_key *updates, int nupdates)
+{
+	wg_device newdev = { 0 };
+	wg_peer newpeers[WG_DYNAMIC_LEASE_CHUNKSIZE] = { 0 },
+		**nextpp = &newdev.first_peer;
+	wg_allowedip newallowedips[WG_DYNAMIC_LEASE_CHUNKSIZE] = { 0 };
+
+	int newpeers_idx = 0;
+	wg_peer *peer;
+	wg_for_each_peer (device, peer) {
+		for (int i = 0; i < nupdates; i++) {
+			if (!memcmp(peer->public_key, updates[i],
+				    sizeof(wg_key))) {
+				wg_peer *pp = &newpeers[newpeers_idx];
+				pp->flags |= WGPEER_REPLACE_ALLOWEDIPS;
+				memcpy(pp->public_key, peer->public_key,
+				       sizeof(wg_key));
+
+				/* Whacking all addrs except the first (!) link-local /128 . */
+				wg_allowedip *allowedip;
+				wg_for_each_allowedip (peer, allowedip) {
+					if (allowedip->family == AF_INET6 &&
+					    allowedip->cidr == 128 &&
+					    IN6_IS_ADDR_LINKLOCAL(
+						    &allowedip->ip6)) {
+						wg_allowedip *aip =
+							&newallowedips
+								[newpeers_idx];
+						aip->family = AF_INET6;
+						memcpy(&aip->ip6,
+						       &allowedip->ip6,
+						       sizeof(struct in6_addr));
+						aip->cidr = 128;
+						pp->first_allowedip = aip;
+						break;
+					}
+				}
+				newpeers_idx++;
+				*nextpp = pp;
+				nextpp = &pp->next_peer;
+				break; /* Assuming no duplicated pubkeys in updates. */
+			}
+		}
+	}
+
+	if (newpeers_idx) {
+		strcpy(newdev.name, wg_interface);
+		if (wg_set_device(&newdev))
+			fatal("wg_set_device()");
+	}
+}
+
 static int response_request_ip(struct wg_dynamic_attr *cur, wg_key pubkey,
 			       struct wg_dynamic_lease **lease)
 {
@@ -546,7 +599,7 @@ static void poll_loop()
 		fatal("epoll_ctl()");
 
 	while (1) {
-		time_t next = leases_refresh() * 1000;
+		time_t next = leases_refresh(update_allowed_ips) * 1000;
 		int nfds = epoll_wait(epollfd, events, MAX_CONNECTIONS, next);
 		if (nfds == -1) {
 			if (errno == EINTR)

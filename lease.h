@@ -13,6 +13,8 @@
 #include "common.h"
 #include "netlink.h"
 
+#define WG_DYNAMIC_LEASE_CHUNKSIZE 256
+
 struct wg_dynamic_lease {
 	time_t start_real;
 	time_t start_mono;
@@ -54,7 +56,7 @@ bool extend_lease(struct wg_dynamic_lease *lease, uint32_t leasetime);
 /* Refreshes all leases, meaning expired ones will be removed. Returns the
  * amount of seconds until the next lease will expire, or at most INT_MAX/1000.
  */
-int leases_refresh();
+int leases_refresh(void (*update_cb)(wg_key *, int));
 
 /*
  * Updates all pools with information from the mnl socket nlsock.
