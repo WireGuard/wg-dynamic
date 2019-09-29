@@ -91,9 +91,11 @@ void leases_free()
 }
 
 struct wg_dynamic_lease *new_lease(wg_key pubkey, uint32_t leasetime,
-				   struct in_addr *ipv4, struct in6_addr *ipv6)
+				   const struct in_addr *ipv4,
+				   const struct in6_addr *ipv6,
+				   struct wg_dynamic_lease *current)
 {
-	struct wg_dynamic_lease *lease, *parent;
+	struct wg_dynamic_lease *lease;
 	uint64_t index_l;
 	uint32_t index, index_h;
 	struct timespec tp;
@@ -101,34 +103,90 @@ struct wg_dynamic_lease *new_lease(wg_key pubkey, uint32_t leasetime,
 	int ret;
 	bool wants_ipv4 = !ipv4 || ipv4->s_addr;
 	bool wants_ipv6 = !ipv6 || !IN6_IS_ADDR_UNSPECIFIED(ipv6);
+	bool ipv4_extended = false;
+	bool ipv6_extended = false;
 
-	lease = malloc(sizeof *lease);
+	char ipv4_asc[INET_ADDRSTRLEN], ipv6_asc[INET6_ADDRSTRLEN];
+	wg_key_b64_string pubkey_asc;
+	wg_key_to_base64(pubkey_asc, pubkey);
+
+	lease = calloc(1, sizeof *lease);
 	if (!lease)
-		fatal("malloc()");
+		fatal("calloc()");
 
-	if (wants_ipv4 && !pool.total_ipv4)
-		return NULL; /* no ipv4 addresses available */
+	/* Extend addresses explicitly asked for and which we already have. */
+	if (lease_is_valid(current)) {
+		if (current->ipv4.s_addr) {
+			if (ipv4 && ipv4->s_addr == current->ipv4.s_addr) {
+				inet_ntop(AF_INET, &current->ipv4, ipv4_asc,
+					  INET_ADDRSTRLEN);
+				debug("extending %s\n", ipv4_asc);
 
-	if (wants_ipv6 && !pool.totalh_ipv6 && !pool.totall_ipv6)
-		return NULL; /* no ipv6 addresses available */
+				memcpy(&lease->ipv4, &current->ipv4,
+				       sizeof lease->ipv4);
+				memset(&current->ipv4, 0, sizeof current->ipv4);
+				ipv4_extended = true;
+			}
+		}
+		if (!IN6_IS_ADDR_UNSPECIFIED(&current->ipv6)) {
+			if (ipv6 && IN6_ARE_ADDR_EQUAL(ipv6, &current->ipv6)) {
+				inet_ntop(AF_INET6, &current->ipv6, ipv6_asc,
+					  INET6_ADDRSTRLEN);
+				debug("extending %s\n", ipv6_asc);
 
-	if (wants_ipv4) {
-		if (!ipv4) {
+				memcpy(&lease->ipv6, &current->ipv6,
+				       sizeof lease->ipv6);
+				memset(&current->ipv6, 0, sizeof current->ipv6);
+				ipv6_extended = true;
+			}
+		}
+	}
+
+	if (ipv4)
+		inet_ntop(AF_INET, ipv4, ipv4_asc, INET_ADDRSTRLEN); /* DEBUG */
+
+	/* Allocate IPv4 if wanted and not already extended. */
+	if (wants_ipv4 && !ipv4_extended) {
+		if (!pool.total_ipv4) {
+			debug("IPv4 pool empty\n");
+		} else if (!ipv4) {
 			index = random_bounded(pool.total_ipv4 - 1);
+
 			debug("new_lease(v4): %u of %u\n", index,
 			      pool.total_ipv4);
 
 			ipp_addnth_v4(&pool, &lease->ipv4, index);
 		} else {
-			if (ipp_add_v4(&pool, ipv4, 32))
-				return NULL;
+			debug("wants %s: ", ipv4_asc);
 
-			memcpy(&lease->ipv4, ipv4, sizeof *ipv4);
+			if (ipp_add_v4(&pool, ipv4, 32)) {
+				debug("busy, possibly by us: %s\n",
+				      lease_to_str(current));
+			} else {
+				debug("allocated\n");
+				memcpy(&lease->ipv4, ipv4, sizeof lease->ipv4);
+			}
 		}
 	}
 
-	if (wants_ipv6) {
-		if (!ipv6) {
+	/* Release IPv4 if not wanted and not extended. */
+	if (!wants_ipv4 && !ipv4_extended && ipv4 && ipv4->s_addr) {
+		debug("releasing %s\n", ipv4_asc);
+
+		if (ipp_del_v4(&pool, &lease->ipv4, 32))
+			die("ipp_del_v4()\n");
+		memset(&lease->ipv4, 0, sizeof lease->ipv4);
+	}
+
+	if (ipv6)
+		inet_ntop(AF_INET6, ipv6, ipv6_asc,
+			  INET6_ADDRSTRLEN); /* DEBUG */
+
+	/* Allocate IPv6 if wanted and not already extended. */
+	if (wants_ipv6 && !ipv6_extended) {
+		if (!pool.totalh_ipv6 && !pool.totall_ipv6) {
+			debug("IPv6 pool empty\n");
+		} else if (!ipv6) {
 			if (pool.totalh_ipv6 > 0) {
 				index_l = random_bounded(UINT64_MAX);
 				index_h = random_bounded(pool.totalh_ipv6 - 1);
@@ -139,19 +197,38 @@ struct wg_dynamic_lease *new_lease(wg_key pubkey, uint32_t leasetime,
 
 			debug("new_lease(v6): %u:%ju of %u:%ju\n", index_h,
 			      index_l, pool.totalh_ipv6, pool.totall_ipv6);
+
 			ipp_addnth_v6(&pool, &lease->ipv6, index_l, index_h);
 		} else {
+			debug("wants %s: ", ipv6_asc);
+
 			if (ipp_add_v6(&pool, ipv6, 128)) {
-				if (!ipv4 || ipv4->s_addr)
-					ipp_del_v4(&pool, ipv4, 32);
-
-				return NULL;
+				debug("busy, possibly by us: %s\n",
+				      lease_to_str(current));
+			} else {
+				debug("allocated\n");
+				memcpy(&lease->ipv6, ipv6, sizeof lease->ipv6);
 			}
-
-			memcpy(&lease->ipv6, ipv6, sizeof *ipv6);
 		}
 	}
 
+	/* Release IPv6 if not wanted and not extended. */
+	if (!wants_ipv6 && !ipv6_extended && ipv6 &&
+	    !IN6_IS_ADDR_UNSPECIFIED(ipv6)) {
+		debug("releasing %s\n", ipv6_asc);
+
+		if (ipp_del_v6(&pool, &lease->ipv6, 128))
+			die("ipp_del_v6()\n");
+		memset(&lease->ipv6, 0, sizeof lease->ipv6);
+	}
+
+	/* Return NULL if we didn't get at least one address. */
+	if (!lease->ipv4.s_addr && IN6_IS_ADDR_UNSPECIFIED(&lease->ipv6)) {
+		free(lease);
+		return NULL;
+	}
+
+	/* Set leasetime. */
 	if (clock_gettime(CLOCK_REALTIME, &tp))
 		fatal("clock_gettime(CLOCK_REALTIME)");
 
@@ -160,6 +237,7 @@ struct wg_dynamic_lease *new_lease(wg_key pubkey, uint32_t leasetime,
 	lease->leasetime = leasetime;
 	lease->next = NULL;
 
+	/* Update hash table. */
 	wg_key *pubcopy = malloc(sizeof(wg_key));
 	if (!pubcopy)
 		fatal("malloc()");
@@ -169,14 +247,13 @@ struct wg_dynamic_lease *new_lease(wg_key pubkey, uint32_t leasetime,
 	if (ret < 0) {
 		fatal("kh_put()");
 	} else if (ret == 0) {
-		parent = kh_value(leases_ht, k);
+		struct wg_dynamic_lease *parent = kh_value(leases_ht, k);
 		while (parent->next)
 			parent = parent->next;
-
 		parent->next = lease;
-	} else {
+	} else
 		kh_value(leases_ht, k) = lease;
-	}
+	debug("new lease: %s\n", lease_to_str(lease));
 
 	if (lease->start_mono + lease->leasetime < gexpires)
 		gexpires = lease->start_mono + lease->leasetime;
@@ -196,10 +273,50 @@ struct wg_dynamic_lease *get_leases(wg_key pubkey)
 		return kh_val(leases_ht, k);
 }
 
-bool extend_lease(struct wg_dynamic_lease *lease, uint32_t leasetime)
+bool release_lease(struct wg_dynamic_lease *lease, wg_key pubkey)
 {
-	UNUSED(lease);
-	UNUSED(leasetime);
+	struct wg_dynamic_lease *first, *iter;
+	khiter_t k;
+
+	if (!lease)
+		return true;
+
+	k = kh_get(leaseht, leases_ht, pubkey);
+	if (k == kh_end(leases_ht))
+		return true;
+	first = kh_val(leases_ht, k);
+
+	for (iter = first; iter; iter = iter->next)
+		if (iter == lease)
+			break;
+	if (iter != lease)
+		return true;
+
+	debug("Releasing lease: %s\n", lease_to_str(lease));
+	if (lease->ipv4.s_addr && ipp_del_v4(&pool, &lease->ipv4, 32)) {
+		debug("Unable to delete IPv4 address from pool: %s\n",
+		      lease_to_str(lease));
+		die("ipp_del_v4()\n");
+	}
+	if (!IN6_IS_ADDR_UNSPECIFIED(&lease->ipv6) &&
+	    ipp_del_v6(&pool, &lease->ipv6, 128)) {
+		debug("Unable to delete IPv6 address from pool: %s\n",
+		      lease_to_str(lease));
+		die("ipp_del_v6()\n");
+	}
+
+	if (lease == first) {
+		if (lease->next) {
+			kh_val(leases_ht, k) = lease->next;
+		} else {
+			kh_del(leaseht, leases_ht, k);
+		}
+	} else {
+		BUG_ON(first->next == NULL);
+		first->next = NULL;
+	}
+	free(lease);
+
 	return false;
 }
 
@@ -230,11 +347,14 @@ int leases_refresh(void (*update_cb)(wg_key *, int))
 				if (!IN6_IS_ADDR_UNSPECIFIED(ipv6))
 					ipp_del_v6(&pool, ipv6, 128);
 
-				memcpy(updates[i], kh_key(leases_ht, k), sizeof(wg_key));
+				memcpy(updates[i], kh_key(leases_ht, k),
+				       sizeof(wg_key));
 				{
 					wg_key_b64_string pubkey_asc;
-					wg_key_to_base64(pubkey_asc, updates[i]);
-					debug("Peer losing its lease: %s\n", pubkey_asc);
+					wg_key_to_base64(pubkey_asc,
+							 updates[i]);
+					debug("Peer losing its lease: %s\n",
+					      pubkey_asc);
 				}
 				i++;
 				if (i == WG_DYNAMIC_LEASE_CHUNKSIZE) {
@@ -365,3 +485,30 @@ void leases_update_pools(struct mnl_socket *nlsock)
 	if (ret == -1 && errno != EAGAIN && errno != EWOULDBLOCK)
 		fatal("mnl_socket_recvfrom()");
 }
+
+bool lease_is_valid(const struct wg_dynamic_lease *lease)
+{
+	if (!lease)
+		return false;
+
+	if (get_monotonic_time() >= lease->start_mono + lease->leasetime)
+		return false;
+
+	return true;
+}
+
+#ifdef DEBUG
+char *lease_to_str(const struct wg_dynamic_lease *l)
+{
+	static char buf[4096];
+	char v4[INET_ADDRSTRLEN], v6[INET6_ADDRSTRLEN];
+
+	if (!l)
+		return "(null)";
+
+	inet_ntop(AF_INET, &l->ipv4, v4, sizeof v4);
+	inet_ntop(AF_INET6, &l->ipv6, v6, sizeof v6);
+	snprintf(buf, sizeof buf, "(%p) %s [%s]", l, v4, v6);
+	return buf;
+}
+#endif

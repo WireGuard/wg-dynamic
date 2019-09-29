@@ -87,8 +87,7 @@ static int data_cb(const struct nlmsghdr *nlh, void *data)
 static bool validate_link_local_ip(uint32_t ifindex)
 {
 	struct mnl_cb_data cb_data = {
-		.ifindex = ifindex,
-		.valid_ip_found = false,
+		.ifindex = ifindex, .valid_ip_found = false,
 	};
 
 	iface_get_all_addrs(AF_INET6, data_cb, &cb_data);
@@ -228,17 +227,21 @@ static bool send_error(struct wg_dynamic_request *req, int error)
 	char buf[MAX_RESPONSE_SIZE];
 	size_t msglen = 0;
 
-	print_to_buf(buf, sizeof buf, &msglen, "errno=%d\nerrmsg=%s\n\n", error,
-		     WG_DYNAMIC_ERR[error]);
+	debug("Parse error, errno=%d\n", error);
+
+	print_to_buf(buf, sizeof buf, &msglen, "errno=%d\nerrmsg=%s\n\n",
+		     E_INVALID_REQ, WG_DYNAMIC_ERR[E_INVALID_REQ]);
 
 	return send_message(req, buf, msglen);
 }
 
-static size_t serialize_lease(char *buf, size_t len,
-			      const struct wg_dynamic_lease *lease)
+static size_t serialize_request_ip(char *buf, size_t len,
+				   const struct wg_dynamic_lease *lease)
 {
 	char addrbuf[INET6_ADDRSTRLEN];
 	size_t off = 0;
+
+	print_to_buf(buf, len, &off, "request_ip=1\n");
 
 	if (lease->ipv4.s_addr) {
 		if (!inet_ntop(AF_INET, &lease->ipv4, addrbuf, sizeof addrbuf))
@@ -254,47 +257,69 @@ static size_t serialize_lease(char *buf, size_t len,
 		print_to_buf(buf, len, &off, "ipv6=%s/%d\n", addrbuf, 128);
 	}
 
-	print_to_buf(buf, len, &off, "leasestart=%u\nleasetime=%u\nerrno=0\n\n",
+	print_to_buf(buf, len, &off, "leasestart=%u\nleasetime=%u\n",
 		     lease->start_real, lease->leasetime);
 
 	return off;
 }
 
-static void add_allowed_ips(wg_key pubkey, struct in_addr *ipv4,
-			    struct in6_addr *ipv6)
+static void adjust_allowed_ips(wg_key pubkey, struct in_addr *ipv4,
+			       struct in6_addr *ipv6)
 {
-	wg_allowedip allowed_v4, allowed_v6;
+	wg_allowedip lladdr, allowed_v4, allowed_v6;
 	wg_peer peer = { 0 };
-	wg_device dev = { .first_peer = &peer };
+	wg_device dev = {.first_peer = &peer };
 
 	strcpy(dev.name, wg_interface);
 	memcpy(peer.public_key, pubkey, sizeof peer.public_key);
 	wg_allowedip **cur = &peer.first_allowedip;
 
-	if (ipv4) {
+	wg_peer *ourpeer;
+	wg_for_each_peer (device, ourpeer) {
+		if (!memcmp(ourpeer->public_key, pubkey, sizeof(wg_key))) {
+			peer.flags |= WGPEER_REPLACE_ALLOWEDIPS;
+			memcpy(peer.public_key, pubkey, sizeof(wg_key));
+
+			wg_allowedip *allowedip;
+			wg_for_each_allowedip (ourpeer, allowedip) {
+				if (allowedip->family == AF_INET6 &&
+				    allowedip->cidr == 128 &&
+				    IN6_IS_ADDR_LINKLOCAL(&allowedip->ip6)) {
+					lladdr.family = AF_INET6;
+					memcpy(&lladdr.ip6, &allowedip->ip6,
+					       sizeof(struct in6_addr));
+					lladdr.cidr = 128;
+					*cur = &lladdr;
+					cur = &lladdr.next_allowedip;
+					break;
+				}
+			}
+			break;
+		}
+	}
+
+	if (ipv4 && ipv4->s_addr) {
 		allowed_v4 = (wg_allowedip){
-			.family = AF_INET,
-			.cidr = 32,
-			.ip4 = *ipv4,
+			.family = AF_INET, .cidr = 32, .ip4 = *ipv4,
 		};
 		*cur = &allowed_v4;
 		cur = &allowed_v4.next_allowedip;
 	}
 
-	if (ipv6) {
+	if (ipv6 && !IN6_IS_ADDR_UNSPECIFIED(ipv6)) {
 		allowed_v6 = (wg_allowedip){
-			.family = AF_INET6,
-			.cidr = 128,
-			.ip6 = *ipv6,
+			.family = AF_INET6, .cidr = 128, .ip6 = *ipv6,
 		};
 		*cur = &allowed_v6;
 	}
 
-	if (wg_set_device(&dev))
-		fatal("wg_set_device()");
+	if ((ipv4 && ipv4->s_addr) || (ipv6 && !IN6_IS_ADDR_UNSPECIFIED(ipv6)))
+		if (wg_set_device(&dev))
+			fatal("wg_set_device()");
 }
 
-/* TODO: have UPDATES contain {wg_key, ip4 and ip6} and remove only matching addrs */
+/* TODO: have UPDATES contain {wg_key, ip4, ip6} and remove only matching addrs */
+/* FIXME: rename to remove_allowed_ips() */
 static void update_allowed_ips(wg_key *updates, int nupdates)
 {
 	wg_device newdev = { 0 };
@@ -348,13 +373,12 @@ static void update_allowed_ips(wg_key *updates, int nupdates)
 }
 
 static int response_request_ip(struct wg_dynamic_attr *cur, wg_key pubkey,
-			       struct wg_dynamic_lease **lease)
+			       struct wg_dynamic_lease **lease_out)
 {
 	struct in_addr *ipv4 = NULL;
 	struct in6_addr *ipv6 = NULL;
 	uint32_t leasetime = WG_DYNAMIC_LEASETIME;
-
-	*lease = get_leases(pubkey);
+	struct wg_dynamic_lease *current = NULL;
 
 	while (cur) {
 		switch (cur->key) {
@@ -364,9 +388,6 @@ static int response_request_ip(struct wg_dynamic_attr *cur, wg_key pubkey,
 		case WGKEY_IPV6:
 			ipv6 = &((struct wg_combined_ip *)cur->value)->ip6;
 			break;
-		case WGKEY_LEASETIME:
-			leasetime = *(uint32_t *)cur->value;
-			break;
 		default:
 			debug("Ignoring invalid attribute for request_ip: %d\n",
 			      cur->key);
@@ -374,12 +395,12 @@ static int response_request_ip(struct wg_dynamic_attr *cur, wg_key pubkey,
 		cur = cur->next;
 	}
 
-	if (ipv4 && ipv6 && !ipv4->s_addr && IN6_IS_ADDR_UNSPECIFIED(ipv6))
-		return E_INVALID_REQ;
+	current = get_leases(pubkey);
+	debug("current lease: %s\n", lease_to_str(current));
 
-	*lease = new_lease(pubkey, leasetime, ipv4, ipv6);
-	if (!*lease)
-		return E_IP_UNAVAIL;
+	*lease_out = new_lease(pubkey, leasetime, ipv4, ipv6, current);
+
+	release_lease(current, pubkey);
 
 	return E_NO_ERROR;
 }
@@ -388,27 +409,37 @@ static bool send_response(struct wg_dynamic_request *req)
 {
 	char buf[MAX_RESPONSE_SIZE];
 	struct wg_dynamic_attr *cur = req->first;
-	struct wg_dynamic_lease *lease;
-	size_t msglen;
-	int ret;
+	size_t msglen = 0;
+	int ret = 0;
 
 	switch (req->cmd) {
-	case WGKEY_REQUEST_IP:
+	case WGKEY_REQUEST_IP: {
+		struct wg_dynamic_lease *lease = NULL;
 		ret = response_request_ip(cur, req->pubkey, &lease);
 		if (ret)
 			break;
 
-		add_allowed_ips(req->pubkey, &lease->ipv4, &lease->ipv6);
-		msglen = serialize_lease(buf, sizeof buf, lease);
+		if (lease) {
+			adjust_allowed_ips(req->pubkey, &lease->ipv4,
+					   &lease->ipv6);
+			msglen = serialize_request_ip(buf, sizeof buf, lease);
+		}
 		break;
+	}
 	default:
 		debug("Unknown command: %d\n", req->cmd);
 		BUG();
 	}
 
-	if (ret)
-		return send_error(req, ret);
+	if (ret) {
+		print_to_buf(buf, sizeof buf, &msglen,
+			     "request_ip=1\nerrno=%d\nerrmsg=%s\n\n", ret,
+			     WG_DYNAMIC_ERR[ret]);
 
+		return send_message(req, buf, msglen);
+	}
+
+	print_to_buf(buf, sizeof buf, &msglen, "errno=0\n\n");
 	return send_message(req, buf, msglen);
 }
 
