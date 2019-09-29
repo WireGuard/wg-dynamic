@@ -49,7 +49,8 @@ enum wgdevice_attribute {
 
 enum wgpeer_flag {
 	WGPEER_F_REMOVE_ME = 1U << 0,
-	WGPEER_F_REPLACE_ALLOWEDIPS = 1U << 1
+	WGPEER_F_REPLACE_ALLOWEDIPS = 1U << 1,
+	WGPEER_F_NO_CREATE = 1U << 2,
 };
 enum wgpeer_attribute {
 	WGPEER_A_UNSPEC,
@@ -531,6 +532,8 @@ again:
 			goto toobig_peers;
 		if (peer->flags & WGPEER_REMOVE_ME)
 			flags |= WGPEER_F_REMOVE_ME;
+		if (peer->flags & WGPEER_NO_CREATE)
+			flags |= WGPEER_F_NO_CREATE;
 		if (!allowedip) {
 			if (peer->flags & WGPEER_REPLACE_ALLOWEDIPS)
 				flags |= WGPEER_F_REPLACE_ALLOWEDIPS;
