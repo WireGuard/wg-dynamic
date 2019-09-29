@@ -380,7 +380,7 @@ static int remove_node(struct radix_node *trie, const uint8_t *key,
 static void totalip_inc(struct ipns *ns, uint8_t bits, uint8_t val)
 {
 	if (bits == 32) {
-		BUG_ON(val >= 32);
+		BUG_ON(val > 32);
 		ns->total_ipv4 += 1ULL << val;
 	} else if (bits == 128) {
 		uint64_t tmp = ns->totall_ipv6;
@@ -394,7 +394,7 @@ static void totalip_inc(struct ipns *ns, uint8_t bits, uint8_t val)
 static void totalip_dec(struct ipns *ns, uint8_t bits, uint8_t val)
 {
 	if (bits == 32) {
-		BUG_ON(val >= 32);
+		BUG_ON(val > 32);
 		ns->total_ipv4 -= 1ULL << val;
 	} else if (bits == 128) {
 		uint64_t tmp = ns->totall_ipv6;

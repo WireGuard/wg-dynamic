@@ -238,7 +238,7 @@ struct wg_dynamic_lease *set_lease(wg_key pubkey, uint32_t leasetime,
 			memset(&lease->ipv4, 0, sizeof(lease->ipv4));
 		} else {
 			uint32_t index = random_bounded(ipns.total_ipv4);
-			debug("new_lease(v4): %u of %u\n", index,
+			debug("new_lease(v4): %u of %ju\n", index,
 			      ipns.total_ipv4);
 			ipp_addnth_v4(&ipns, &lease->ipv4, index);
 		}

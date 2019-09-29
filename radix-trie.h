@@ -12,8 +12,8 @@
 
 struct ipns {
 	/* Total amount of available addresses over all pools */
-	uint64_t totall_ipv6;
-	uint32_t totalh_ipv6, total_ipv4;
+	uint64_t totall_ipv6, total_ipv4;
+	uint32_t totalh_ipv6;
 
 	struct radix_node *ip4_root, *ip6_root;
 	struct radix_pool *ip4_pools, *ip6_pools;
