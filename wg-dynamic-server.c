@@ -50,7 +50,7 @@ struct mnl_cb_data {
 
 static void usage()
 {
-	die("usage: %s <wg-interface> [<leasetime>]\n", progname);
+	die("usage: %s <wg-interface> <leasetime>\n", progname);
 }
 
 static int data_cb(const struct nlmsghdr *nlh, void *data)
@@ -646,17 +646,16 @@ static void poll_loop()
 
 int main(int argc, char *argv[])
 {
+	char *endptr = NULL;
+
 	progname = argv[0];
-	if (argc < 2 || argc > 3)
+	if (argc != 3)
 		usage();
 
 	wg_interface = argv[1];
-	if (argc == 3) {
-		char *endptr;
-		leasetime = (uint32_t) strtoul(argv[2], &endptr, 10);
-		if (*endptr)
-			usage();
-	}
+	leasetime = (uint32_t) strtoul(argv[2], &endptr, 10);
+	if (*endptr)
+		usage();
 
 	setup();
 
