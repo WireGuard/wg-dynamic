@@ -44,6 +44,7 @@ struct wg_dynamic_lease *new_lease(wg_key pubkey, uint32_t leasetime,
 				   const struct in6_addr *ipv6,
 				   struct wg_dynamic_lease *current);
 
+
 /*
  * Returns all leases belonging to pubkey, or NULL if there are none.
  */
