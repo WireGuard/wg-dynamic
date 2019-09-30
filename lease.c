@@ -12,6 +12,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <sys/socket.h>
 #include <time.h>
 
@@ -90,45 +91,172 @@ void leases_free()
 	ipp_free(&pool);
 }
 
-struct wg_dynamic_lease *new_lease(wg_key pubkey, uint32_t leasetime,
-				   struct in_addr *ipv4, struct in6_addr *ipv6)
+struct allowedips_update {
+	wg_key peer_pubkey;
+	struct in6_addr *lladdr;
+	struct in_addr *ipv4;
+	struct in6_addr *ipv6;
+};
+
+static char *updates_to_str(const struct allowedips_update *u)
 {
-	struct wg_dynamic_lease *lease, *parent;
-	uint64_t index_l;
-	uint32_t index, index_h;
+	static char buf[4096];
+	wg_key_b64_string pubkey_asc;
+	char ll[INET6_ADDRSTRLEN] = { 0 }, v4[INET_ADDRSTRLEN] = { 0 },
+	     v6[INET6_ADDRSTRLEN] = { 0 };
+
+	if (!u)
+		return "(null)";
+
+	wg_key_to_base64(pubkey_asc, u->peer_pubkey);
+	if (u->ipv4)
+		inet_ntop(AF_INET, u->ipv4, v4, sizeof v4);
+	if (u->ipv6)
+		inet_ntop(AF_INET6, u->ipv6, v6, sizeof v6);
+	if (u->lladdr)
+		inet_ntop(AF_INET6, u->lladdr, ll, sizeof ll);
+	snprintf(buf, sizeof buf, "(%p) [%s] %s [%s]", u, ll, v4, v6);
+
+	return buf;
+}
+
+static void update_allowed_ips_bulk(const char *devname,
+				    const struct allowedips_update *updates,
+				    int nupdates)
+{
+	wg_peer peers[WG_DYNAMIC_LEASE_CHUNKSIZE] = { 0 };
+	wg_allowedip allowedips[3 * WG_DYNAMIC_LEASE_CHUNKSIZE] = { 0 };
+	wg_device dev = { 0 };
+	wg_peer **pp = &dev.first_peer;
+
+	BUG_ON(nupdates > WG_DYNAMIC_LEASE_CHUNKSIZE);
+	for (int i = 0; i < nupdates; i++) {
+		debug("setting allowedips for %s\n",
+		      updates_to_str(&updates[i]));
+
+		peers[i].flags |= WGPEER_REPLACE_ALLOWEDIPS;
+		memcpy(peers[i].public_key, updates[i].peer_pubkey,
+		       sizeof(wg_key));
+		wg_allowedip **aipp = &peers[i].first_allowedip;
+
+		if (updates[i].lladdr &&
+		    !IN6_IS_ADDR_UNSPECIFIED(updates[i].lladdr)) {
+			allowedips[i * 3 + 0] = (wg_allowedip){
+				.family = AF_INET6,
+				.cidr = 128,
+				.ip6 = *updates[i].lladdr,
+			};
+			*aipp = &allowedips[i * 3 + 0];
+			aipp = &allowedips[i * 3 + 0].next_allowedip;
+		}
+		if (updates[i].ipv4 && updates[i].ipv4->s_addr) {
+			allowedips[i * 3 + 1] = (wg_allowedip){
+				.family = AF_INET,
+				.cidr = 32,
+				.ip4 = *updates[i].ipv4,
+			};
+			*aipp = &allowedips[i * 3 + 1];
+			aipp = &allowedips[i * 3 + 1].next_allowedip;
+		}
+		if (updates[i].ipv6 &&
+		    !IN6_IS_ADDR_UNSPECIFIED(updates[i].ipv6)) {
+			allowedips[i * 3 + 2] = (wg_allowedip){
+				.family = AF_INET6,
+				.cidr = 128,
+				.ip6 = *updates[i].ipv6,
+			};
+			*aipp = &allowedips[i * 3 + 2];
+		}
+
+		*pp = &peers[i];
+		pp = &peers[i].next_peer;
+	}
+
+	strncpy(dev.name, devname, sizeof(dev.name) - 1);
+	if (wg_set_device(&dev))
+		fatal("wg_set_device()");
+}
+
+/* Updates allowedips for peer_pubkey, adding what's in lease
+ * (including lladdr), removing all others.
+ */
+static void update_allowed_ips(const char *devname, wg_key peer_pubkey,
+			       struct wg_dynamic_lease *lease)
+{
+	struct allowedips_update update;
+
+	memcpy(update.peer_pubkey, peer_pubkey, sizeof(wg_key));
+	update.lladdr = &lease->lladdr;
+	update.ipv4 = &lease->ipv4;
+	update.ipv6 = &lease->ipv6;
+
+	update_allowed_ips_bulk(devname, &update, 1);
+}
+
+struct wg_dynamic_lease *set_lease(const char *devname, wg_key pubkey,
+				   uint32_t leasetime,
+				   const struct in6_addr *lladdr,
+				   const struct in_addr *ipv4,
+				   const struct in6_addr *ipv6)
+{
+	bool delete_ipv4 = ipv4 && !ipv4->s_addr;
+	bool delete_ipv6 = ipv6 && IN6_IS_ADDR_UNSPECIFIED(ipv6);
+	struct wg_dynamic_lease *lease;
 	struct timespec tp;
 	khiter_t k;
-	int ret;
-	bool wants_ipv4 = !ipv4 || ipv4->s_addr;
-	bool wants_ipv6 = !ipv6 || !IN6_IS_ADDR_UNSPECIFIED(ipv6);
+	int kh_ret;
 
-	lease = malloc(sizeof *lease);
-	if (!lease)
-		fatal("malloc()");
+	lease = get_leases(pubkey);
+	if (!lease) {
+		lease = calloc(1, sizeof(*lease));
+		lease->lladdr = *lladdr;
+	}
 
-	if (wants_ipv4 && !pool.total_ipv4)
-		return NULL; /* no ipv4 addresses available */
+	if (lease->ipv4.s_addr &&
+	    (delete_ipv4 ||
+	     (ipv4 && memcmp(&lease->ipv4, ipv4, sizeof(*ipv4))))) {
+		if (ipp_del_v4(&pool, &lease->ipv4, 32))
+			die("ipp_del_v4()\n");
+		memset(&lease->ipv4, 0, sizeof(lease->ipv4));
+	}
 
-	if (wants_ipv6 && !pool.totalh_ipv6 && !pool.totall_ipv6)
-		return NULL; /* no ipv6 addresses available */
+	if (!IN6_IS_ADDR_UNSPECIFIED(&lease->ipv6) &&
+	    (delete_ipv6 ||
+	     (ipv6 && memcmp(&lease->ipv6, ipv6, sizeof(*ipv6))))) {
+		if (ipp_del_v6(&pool, &lease->ipv6, 128))
+			die("ipp_del_v6()\n");
+		memset(&lease->ipv6, 0, sizeof(lease->ipv6));
+	}
 
-	if (wants_ipv4) {
-		if (!ipv4) {
-			index = random_bounded(pool.total_ipv4 - 1);
+	if (!ipv4) { /* Wants random IPv4 address? */
+		if (!pool.total_ipv4) {
+			debug("IPv4 pool empty\n");
+			memset(&lease->ipv4, 0, sizeof(lease->ipv4));
+		} else {
+			uint32_t index = random_bounded(pool.total_ipv4 - 1);
 			debug("new_lease(v4): %u of %u\n", index,
 			      pool.total_ipv4);
-
 			ipp_addnth_v4(&pool, &lease->ipv4, index);
+		}
+	} else if (ipv4->s_addr) {
+		if (!memcmp(&lease->ipv4, ipv4, sizeof(*ipv4))) {
+			debug("extending(v4)\n");
 		} else {
-			if (ipp_add_v4(&pool, ipv4, 32))
-				return NULL;
-
-			memcpy(&lease->ipv4, ipv4, sizeof *ipv4);
+			if (!ipp_add_v4(&pool, ipv4, 32)) {
+				lease->ipv4 = *ipv4;
+			} else {
+				memset(&lease->ipv4, 0, sizeof(lease->ipv4));
+			}
 		}
 	}
 
-	if (wants_ipv6) {
-		if (!ipv6) {
+	if (!ipv6) { /* Wants random IPv6 address? */
+		if (!pool.totalh_ipv6 && !pool.totall_ipv6) {
+			debug("IPv6 pool empty\n");
+			memset(&lease->ipv6, 0, sizeof(lease->ipv6));
+		} else {
+			uint64_t index_l;
+			uint32_t index_h;
 			if (pool.totalh_ipv6 > 0) {
 				index_l = random_bounded(UINT64_MAX);
 				index_h = random_bounded(pool.totalh_ipv6 - 1);
@@ -140,43 +268,38 @@ struct wg_dynamic_lease *new_lease(wg_key pubkey, uint32_t leasetime,
 			debug("new_lease(v6): %u:%ju of %u:%ju\n", index_h,
 			      index_l, pool.totalh_ipv6, pool.totall_ipv6);
 			ipp_addnth_v6(&pool, &lease->ipv6, index_l, index_h);
+		}
+	} else if (!IN6_IS_ADDR_UNSPECIFIED(ipv6)) {
+		if (!memcmp(&lease->ipv6, ipv6, sizeof(*ipv6))) {
+			debug("extending(v6)\n");
 		} else {
-			if (ipp_add_v6(&pool, ipv6, 128)) {
-				if (!ipv4 || ipv4->s_addr)
-					ipp_del_v4(&pool, ipv4, 32);
-
-				return NULL;
+			if (!ipp_add_v6(&pool, ipv6, 128)) {
+				lease->ipv6 = *ipv6;
+			} else {
+				memset(&lease->ipv6, 0, sizeof(lease->ipv6));
 			}
-
-			memcpy(&lease->ipv6, ipv6, sizeof *ipv6);
 		}
 	}
 
+	update_allowed_ips(devname, pubkey, lease);
+
 	if (clock_gettime(CLOCK_REALTIME, &tp))
 		fatal("clock_gettime(CLOCK_REALTIME)");
-
 	lease->start_real = tp.tv_sec;
 	lease->start_mono = get_monotonic_time();
 	lease->leasetime = leasetime;
-	lease->next = NULL;
 
 	wg_key *pubcopy = malloc(sizeof(wg_key));
 	if (!pubcopy)
 		fatal("malloc()");
 
 	memcpy(pubcopy, pubkey, sizeof(wg_key));
-	k = kh_put(leaseht, leases_ht, *pubcopy, &ret);
-	if (ret < 0) {
-		fatal("kh_put()");
-	} else if (ret == 0) {
-		parent = kh_value(leases_ht, k);
-		while (parent->next)
-			parent = parent->next;
+	k = kh_put(leaseht, leases_ht, *pubcopy, &kh_ret);
 
-		parent->next = lease;
-	} else {
-		kh_value(leases_ht, k) = lease;
-	}
+	if (kh_ret < 0)
+		die("kh_put(): %d\n", kh_ret);
+
+	kh_value(leases_ht, k) = lease;
 
 	if (lease->start_mono + lease->leasetime < gexpires)
 		gexpires = lease->start_mono + lease->leasetime;
@@ -196,54 +319,56 @@ struct wg_dynamic_lease *get_leases(wg_key pubkey)
 		return kh_val(leases_ht, k);
 }
 
-bool extend_lease(struct wg_dynamic_lease *lease, uint32_t leasetime)
-{
-	UNUSED(lease);
-	UNUSED(leasetime);
-	return false;
-}
-
-int leases_refresh()
+int leases_refresh(const char *devname)
 {
 	time_t cur_time = get_monotonic_time();
+	struct allowedips_update updates[WG_DYNAMIC_LEASE_CHUNKSIZE] = { 0 };
 
 	if (cur_time < gexpires)
 		return MIN(INT_MAX / 1000, gexpires - cur_time);
 
 	gexpires = TIME_T_MAX;
 
+	int i = 0;
 	for (khint_t k = kh_begin(leases_ht); k != kh_end(leases_ht); ++k) {
 		if (!kh_exist(leases_ht, k))
 			continue;
+		struct wg_dynamic_lease *lease = kh_val(leases_ht, k);
+		BUG_ON(!lease);
+		time_t expires = lease->start_mono + lease->leasetime;
+		if (cur_time >= expires) {
+			if (lease->ipv4.s_addr)
+				ipp_del_v4(&pool, &lease->ipv4, 32);
 
-		struct wg_dynamic_lease **pp = &kh_val(leases_ht, k), *tmp;
-		while (*pp) {
-			struct in_addr *ipv4 = &(*pp)->ipv4;
-			struct in6_addr *ipv6 = &(*pp)->ipv6;
-			time_t expires = (*pp)->start_mono + (*pp)->leasetime;
-			if (cur_time >= expires) {
-				if (ipv4->s_addr)
-					ipp_del_v4(&pool, ipv4, 32);
+			if (!IN6_IS_ADDR_UNSPECIFIED(&lease->ipv6))
+				ipp_del_v6(&pool, &lease->ipv6, 128);
 
-				if (!IN6_IS_ADDR_UNSPECIFIED(ipv6))
-					ipp_del_v6(&pool, ipv6, 128);
+			memcpy(updates[i].peer_pubkey, kh_key(leases_ht, k),
+			       sizeof(wg_key));
+			updates[i].lladdr = &lease->lladdr;
 
-				tmp = *pp;
-				*pp = (*pp)->next;
-				free(tmp);
-			} else {
-				if (expires < gexpires)
-					gexpires = expires;
+			wg_key_b64_string pubkey_asc;
+			wg_key_to_base64(pubkey_asc, updates[i].peer_pubkey);
+			debug("Peer losing its lease: %s\n", pubkey_asc);
 
-				pp = &(*pp)->next;
+			++i;
+			if (i == WG_DYNAMIC_LEASE_CHUNKSIZE) {
+				update_allowed_ips_bulk(devname, updates, i);
+				i = 0;
+				memset(updates, 0, sizeof updates);
 			}
-		}
 
-		if (!kh_val(leases_ht, k)) {
+			free(lease);
 			free((char *)kh_key(leases_ht, k));
 			kh_del(leaseht, leases_ht, k);
+		} else {
+			if (expires < gexpires)
+				gexpires = expires;
 		}
 	}
+
+	if (i)
+		update_allowed_ips_bulk(devname, updates, i);
 
 	return MIN(INT_MAX / 1000, gexpires - cur_time);
 }
