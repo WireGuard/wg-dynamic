@@ -398,6 +398,33 @@ static void cleanup()
 	}
 }
 
+static void init_leaess_from_peers()
+{
+	wg_peer *peer;
+
+	wg_for_each_peer (device, peer) {
+		wg_allowedip *allowedip;
+		struct in6_addr *lladdr = NULL;
+		struct in_addr *ipv4 = NULL;
+		struct in6_addr *ipv6 = NULL;
+		wg_for_each_allowedip (peer, allowedip) {
+			if (allowedip->family == AF_INET6 &&
+			    IN6_IS_ADDR_LINKLOCAL(&allowedip->ip6))
+				lladdr = &allowedip->ip6;
+			else if (allowedip->family == AF_INET && !ipv4)
+				ipv4 = &allowedip->ip4;
+			else if (allowedip->family == AF_INET6 && !ipv6)
+				ipv6 = &allowedip->ip6;
+		}
+
+		if (!ipv4 && !ipv6)
+			continue;
+
+		set_lease(wg_interface, peer->public_key, leasetime, lladdr,
+			  ipv4, ipv6);
+	}
+}
+
 static void setup()
 {
 	if (inet_pton(AF_INET6, WG_DYNAMIC_ADDR, &well_known) != 1)
@@ -423,7 +450,8 @@ static void setup()
 		    wg_interface);
 
 	setup_sockets();
-	leases_init("leases_file", nlsock);
+	leases_init(NULL, nlsock);
+	init_leaess_from_peers();
 }
 
 static int get_avail_request()
