@@ -2,446 +2,288 @@
  *
  * Copyright (C) 2019 WireGuard LLC. All Rights Reserved.
  */
-
-#include <fcntl.h>
-#include <poll.h>
-#include <signal.h>
-#include <stdio.h>
-#include <string.h>
-#include <stdlib.h>
-#include <unistd.h>
+#define _POSIX_C_SOURCE 200112L
 
 #include <arpa/inet.h>
-#include <libmnl/libmnl.h>
-#include <linux/rtnetlink.h>
+#include <signal.h>
+#include <stdbool.h>
+#include <stdint.h>
+#include <sys/socket.h>
+#include <sys/time.h>
+#include <sys/types.h>
+#include <time.h>
+#include <unistd.h>
 
 #include "common.h"
 #include "dbg.h"
+#include "ipm.h"
 #include "netlink.h"
-
-struct wg_dynamic_lease {
-	struct wg_combined_ip ip4;
-	struct wg_combined_ip ip6;
-	uint32_t start;
-	uint32_t leasetime;
-	struct wg_dynamic_lease *next;
-};
 
 static const char *progname;
 static const char *wg_interface;
-static wg_device *device = NULL;
-static int our_fd = -1;
-static struct in6_addr our_lladdr = { 0 };
-static struct wg_combined_ip our_gaddr4 = { 0 };
-static struct wg_combined_ip our_gaddr6 = { 0 };
-static struct wg_dynamic_lease our_lease = { 0 };
+static struct in6_addr well_known;
+static struct in6_addr lladdr;
 
-struct mnl_cb_data {
-	uint32_t ifindex;
-	struct in6_addr *lladdr;
-	struct wg_combined_ip *gaddr4;
-	struct wg_combined_ip *gaddr6;
-};
+static struct in_addr ipv4;
+static struct in6_addr ipv6;
+static bool ipv4_assigned = false, ipv6_assigned = false;
+
+static wg_device *device = NULL;
+static int sockfd = -1;
+
+static volatile sig_atomic_t should_exit = 0;
 
 static void usage()
 {
 	die("usage: %s <wg-interface>\n", progname);
 }
 
-int data_cb(const struct nlmsghdr *nlh, void *data)
+/* NOTE: do NOT call exit() in here */
+static void cleanup()
 {
-	struct nlattr *tb[IFA_MAX + 1] = {};
-	struct ifaddrmsg *ifa = mnl_nlmsg_get_payload(nlh);
-	struct mnl_cb_data *cb_data = (struct mnl_cb_data *)data;
-	unsigned char *addr;
+	if (ipv4_assigned && ipm_deladdr_v4(device->ifindex, &ipv4))
+		debug("Failed to cleanup ipv4 address");
+	if (ipv6_assigned && ipm_deladdr_v6(device->ifindex, &ipv6))
+		debug("Failed to cleanup ipv6 address");
 
-	if (ifa->ifa_index != cb_data->ifindex)
-		return MNL_CB_OK;
+	if (sockfd >= 0)
+		close(sockfd);
 
-	mnl_attr_parse(nlh, sizeof(*ifa), data_attr_cb, tb);
-
-	if (!tb[IFA_ADDRESS])
-		return MNL_CB_OK;
-
-	addr = mnl_attr_get_payload(tb[IFA_ADDRESS]);
-	char out[INET6_ADDRSTRLEN];
-	inet_ntop(ifa->ifa_family, addr, out, sizeof(out));
-	debug("index=%d, family=%d, addr=%s\n", ifa->ifa_index, ifa->ifa_family,
-	      out);
-
-	if (ifa->ifa_scope == RT_SCOPE_LINK) {
-		if (ifa->ifa_prefixlen != 128)
-			return MNL_CB_OK;
-		memcpy(cb_data->lladdr, addr, 16);
-	} else if (ifa->ifa_scope == RT_SCOPE_UNIVERSE) {
-		switch (ifa->ifa_family) {
-		case AF_INET:
-			cb_data->gaddr4->family = ifa->ifa_family;
-			memcpy(&cb_data->gaddr4->ip4, addr, 4);
-			cb_data->gaddr4->cidr = ifa->ifa_prefixlen;
-			break;
-		case AF_INET6:
-			cb_data->gaddr6->family = ifa->ifa_family;
-			memcpy(&cb_data->gaddr6->ip6, addr, 16);
-			cb_data->gaddr6->cidr = ifa->ifa_prefixlen;
-			break;
-		default:
-			die("Unknown address family: %u\n", ifa->ifa_family);
-		}
-	}
-
-	return MNL_CB_OK;
+	ipm_free();
+	wg_free_device(device);
 }
 
-static void iface_update(uint16_t cmd, uint16_t flags, uint32_t ifindex,
-			 const struct wg_combined_ip *addr)
+static void handler(int signum)
 {
-	struct mnl_socket *nl;
-	char buf[MNL_SOCKET_BUFFER_SIZE];
-	struct nlmsghdr *nlh;
-	unsigned int seq, portid;
-	struct ifaddrmsg *ifaddr; /* linux/if_addr.h */
-	int ret;
-
-	nl = mnl_socket_open(NETLINK_ROUTE);
-	if (nl == NULL)
-		fatal("mnl_socket_open");
-
-	if (mnl_socket_bind(nl, 0, MNL_SOCKET_AUTOPID) < 0)
-		fatal("mnl_socket_bind");
-
-	portid = mnl_socket_get_portid(nl);
-	seq = time(NULL);
-	nlh = mnl_nlmsg_put_header(buf);
-	nlh->nlmsg_seq = seq;
-	nlh->nlmsg_type = cmd;
-	nlh->nlmsg_flags = NLM_F_REQUEST | NLM_F_ACK | flags;
-	ifaddr = mnl_nlmsg_put_extra_header(nlh, sizeof(struct ifaddrmsg));
-	ifaddr->ifa_family = addr->family;
-	ifaddr->ifa_prefixlen = addr->cidr;
-	ifaddr->ifa_scope = RT_SCOPE_UNIVERSE; /* linux/rtnetlink.h */
-	ifaddr->ifa_index = ifindex;
-	mnl_attr_put(nlh, IFA_LOCAL, addr->family == AF_INET ? 4 : 16, &addr);
-
-	if (mnl_socket_sendto(nl, nlh, nlh->nlmsg_len) < 0)
-		fatal("mnl_socket_sendto");
-
-	do {
-		ret = mnl_socket_recvfrom(nl, buf, sizeof(buf));
-		if (ret <= MNL_CB_STOP)
-			break;
-		ret = mnl_cb_run(buf, ret, seq, portid, NULL, NULL);
-	} while (ret > 0);
-
-	if (ret == -1)
-		fatal("mnl_cb_run/mnl_socket_recvfrom");
-
-	mnl_socket_close(nl);
+	UNUSED(signum);
+	should_exit = 1;
 }
 
-static void iface_remove_addr(uint32_t ifindex,
-			      const struct wg_combined_ip *addr)
+static void check_signal()
 {
-	char ipstr[INET6_ADDRSTRLEN];
-	debug("removing %s/%u from interface %u\n",
-	      inet_ntop(addr->family, &addr, ipstr, sizeof ipstr), addr->cidr,
-	      ifindex);
-	iface_update(RTM_DELADDR, 0, ifindex, addr);
+	if (should_exit)
+		exit(EXIT_FAILURE);
 }
 
-static void iface_add_addr(uint32_t ifindex, const struct wg_combined_ip *addr)
+static int request_ip(struct wg_dynamic_request_ip *rip)
 {
-	char ipstr[INET6_ADDRSTRLEN];
-	debug("adding %s/%u to interface %u\n",
-	      inet_ntop(addr->family, &addr, ipstr, sizeof ipstr), addr->cidr,
-	      ifindex);
-	iface_update(RTM_NEWADDR, NLM_F_REPLACE | NLM_F_CREATE, ifindex, addr);
-}
-
-static bool get_and_validate_local_addrs(uint32_t ifindex,
-					 struct in6_addr *lladdr,
-					 struct wg_combined_ip *gaddr4,
-					 struct wg_combined_ip *gaddr6)
-{
-	struct mnl_cb_data cb_data = {
-		.ifindex = ifindex,
-		.lladdr = lladdr,
-		.gaddr4 = gaddr4,
-		.gaddr6 = gaddr6,
-	};
-
-	iface_get_all_addrs(AF_INET, data_cb, &cb_data);
-	iface_get_all_addrs(AF_INET6, data_cb, &cb_data);
-
-	return !IN6_IS_ADDR_UNSPECIFIED(cb_data.lladdr);
-}
-
-static int try_connect(int *fd)
-{
-	struct timeval tval = { .tv_sec = 1, .tv_usec = 0 };
-	struct sockaddr_in6 our_addr = {
+	unsigned char buf[RECV_BUFSIZE + MAX_LINESIZE];
+	size_t msglen, remaining, off = 0;
+	struct sockaddr_in6 dstaddr = {
 		.sin6_family = AF_INET6,
-		.sin6_addr = our_lladdr,
+		.sin6_addr = well_known,
 		.sin6_port = htons(WG_DYNAMIC_PORT),
 		.sin6_scope_id = device->ifindex,
 	};
-	struct sockaddr_in6 their_addr = {
+	struct sockaddr_in6 srcaddr = {
 		.sin6_family = AF_INET6,
+		.sin6_addr = lladdr,
 		.sin6_port = htons(WG_DYNAMIC_PORT),
 		.sin6_scope_id = device->ifindex,
 	};
+	struct wg_dynamic_request req = {
+		.cmd = WGKEY_REQUEST_IP,
+		.version = 1,
+		.result = rip,
+	};
+	struct timeval timeout = { .tv_sec = 30 };
+	ssize_t ret;
+	int val = 1;
 
-	*fd = socket(AF_INET6, SOCK_STREAM, 0);
-	if (*fd < 0)
+	sockfd = socket(AF_INET6, SOCK_STREAM, 0);
+	if (sockfd < 0)
 		fatal("Creating a socket failed");
 
-	if (setsockopt(*fd, SOL_SOCKET, SO_RCVTIMEO, &tval, sizeof tval) == -1)
-		fatal("Setting socket option failed");
+	if (setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &val, sizeof val))
+		fatal("setsockopt(SO_REUSEADDR)");
 
-	if (bind(*fd, (struct sockaddr *)&our_addr, sizeof(our_addr)))
+	if (setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, (char *)&timeout,
+		       sizeof timeout))
+		fatal("setsockopt(SO_RCVTIMEO)");
+
+	if (setsockopt(sockfd, SOL_SOCKET, SO_SNDTIMEO, (char *)&timeout,
+		       sizeof timeout))
+		fatal("setsockopt(SO_SNDTIMEO)");
+
+	if (bind(sockfd, (struct sockaddr *)&srcaddr, sizeof(srcaddr)))
 		fatal("Binding socket failed");
 
-	if (inet_pton(AF_INET6, WG_DYNAMIC_ADDR, &their_addr.sin6_addr) != 1)
-		fatal("inet_pton()");
+	if (connect(sockfd, (struct sockaddr *)&dstaddr, sizeof(dstaddr)))
+		fatal("connect()");
 
-	if (connect(*fd, (struct sockaddr *)&their_addr,
-		    sizeof(struct sockaddr_in6))) {
-		char out[INET6_ADDRSTRLEN];
+	if (ipv4_assigned) {
+		memcpy(&rip->ipv4, &ipv4, sizeof rip->ipv4);
+		rip->has_ipv4 = true;
+	}
+	if (ipv6_assigned) {
+		memcpy(&rip->ipv6, &ipv6, sizeof rip->ipv6);
+		rip->has_ipv6 = true;
+	}
 
-		if (!inet_ntop(their_addr.sin6_family, &their_addr.sin6_addr,
-			       out, sizeof out))
-			fatal("inet_ntop()");
-		debug("Connecting to [%s]:%u failed: %s\n", out,
-		      ntohs(their_addr.sin6_port), strerror(errno));
+	msglen = serialize_request_ip(true, (char *)buf, RECV_BUFSIZE, rip);
+	do {
+		ssize_t written = write(sockfd, buf + off, msglen - off);
+		if (written == -1) {
+			if (errno == EINTR) {
+				check_signal();
+				continue;
+			}
 
-		if (close(*fd))
-			debug("Closing socket failed: %s\n", strerror(errno));
-		*fd = -1;
+			fatal("write()");
+		}
+
+		off += written;
+	} while (off < msglen);
+
+	memset(rip, 0, sizeof *rip);
+
+	while ((ret = handle_request(sockfd, &req, buf, &remaining)) <= 0) {
+		if (ret == 0) {
+			check_signal();
+			continue;
+		}
+
+		if (close(sockfd))
+			debug("Failed to close socket: %s\n", strerror(errno));
+
 		return -1;
 	}
 
+	if (remaining > 0)
+		log_err("Warning: discarding %zu extra bytes sent by the server\n",
+			remaining);
+
+	if (rip->wg_errno)
+		return -1;
+
+	if (!ipv4_assigned || memcmp(&ipv4, &rip->ipv4, sizeof ipv4)) {
+		if (ipv4_assigned && ipm_deladdr_v4(device->ifindex, &ipv4))
+			fatal("ipm_deladdr_v4()");
+
+		memcpy(&ipv4, &rip->ipv4, sizeof ipv4);
+		if (ipm_newaddr_v4(device->ifindex, &ipv4))
+			fatal("ipm_newaddr_v4()");
+		ipv4_assigned = true;
+	}
+
+	if (!ipv6_assigned || memcmp(&ipv6, &rip->ipv6, sizeof ipv6)) {
+		if (ipv6_assigned && ipm_deladdr_v6(device->ifindex, &ipv6))
+			fatal("ipm_deladdr_v6()");
+
+		memcpy(&ipv6, &rip->ipv6, sizeof ipv6);
+		if (ipm_newaddr_v6(device->ifindex, &ipv6))
+			fatal("ipm_newaddr_v6()");
+		ipv6_assigned = true;
+	}
+
+	if (close(sockfd))
+		debug("Failed to close socket: %s\n", strerror(errno));
+
 	return 0;
 }
 
-static void request_ip(int fd, const struct wg_dynamic_lease *lease)
+static void setup()
 {
-	unsigned char buf[MAX_RESPONSE_SIZE + 1];
-	char addrstr[INET6_ADDRSTRLEN];
-	size_t msglen;
+	struct sigaction sa = { .sa_handler = handler, .sa_flags = 0 };
+	struct wg_combined_ip ip;
+	int ret;
 
-	msglen = 0;
-	msglen += print_to_buf((char *)buf, sizeof buf, msglen, "%s=%d\n",
-			       WG_DYNAMIC_KEY[WGKEY_REQUEST_IP], 1);
+	if (atexit(cleanup))
+		die("Failed to set exit function\n");
 
-	if (lease && lease->ip4.ip4.s_addr) {
-		if (!inet_ntop(AF_INET, &lease->ip4.ip4, addrstr,
-			       sizeof addrstr))
-			fatal("inet_ntop()");
-		msglen += print_to_buf((char *)buf, sizeof buf, msglen,
-				       "ipv4=%s/32\n", addrstr);
-	}
-	if (lease && !IN6_IS_ADDR_UNSPECIFIED(&lease->ip6.ip6)) {
-		if (!inet_ntop(AF_INET6, &lease->ip6.ip6, addrstr,
-			       sizeof addrstr))
-			fatal("inet_ntop()");
-		msglen += print_to_buf((char *)buf, sizeof buf, msglen,
-				       "ipv6=%s/128\n", addrstr);
-	}
-	/* nmsglen += print_to_buf((char *)buf, sizeof buf, msglen,
-	   "leasetime=%u\n", fixme); */
+	sigemptyset(&sa.sa_mask);
+	if (sigaction(SIGINT, &sa, NULL) == -1)
+		fatal("sigaction()");
 
-	msglen += print_to_buf((char *)buf, sizeof buf, msglen, "\n");
+	if (wg_get_device(&device, wg_interface))
+		fatal("Unable to access interface %s", wg_interface);
 
-	send_message(fd, buf, &msglen);
+	if (inet_pton(AF_INET6, WG_DYNAMIC_ADDR, &well_known) != 1)
+		fatal("inet_pton()");
+
+	ipm_init();
+
+	ret = ipm_getlladdr(device->ifindex, &ip);
+	if (ret == -1)
+		fatal("ipm_getlladdr()");
+
+	if (ret == -2 || ip.family != AF_INET6)
+		die("%s needs to be assigned an IPv6 link local address\n",
+		    wg_interface);
+
+	if (ret == -3)
+		die("Interface must not have multiple link-local addresses assigned\n");
+
+	if (ip.cidr != 128)
+		die("Link-local address must have a CIDR of 128\n");
+
+	memcpy(&lladdr, &ip, 16);
 }
 
-static uint32_t time_until_refresh(uint32_t now, struct wg_dynamic_lease *lease)
+static void xnanosleep(time_t duration)
 {
-	uint32_t refresh_at;
+	struct timespec rem, timeout = { .tv_sec = duration };
+	int ret;
 
-	if (lease->leasetime == 0)
-		return 0;
-	refresh_at = lease->start + (lease->leasetime * 8) / 10;
-
-	if (refresh_at < now)
-		return 0;
-	return refresh_at - now;
-}
-
-static int handle_received_lease(const struct wg_dynamic_request *req)
-{
-	uint32_t ret;
-	struct wg_dynamic_attr *attr;
-	struct wg_dynamic_lease *lease = &our_lease;
-	uint32_t now = current_time();
-	uint32_t lease_start = 0;
-	uint32_t curleasetime = lease->start + lease->leasetime;
-
-	attr = req->first;
-	while (attr) {
-		switch (attr->key) {
-		case WGKEY_IPV4:
-			memcpy(&lease->ip4, attr->value,
-			       sizeof(struct wg_combined_ip));
-			break;
-		case WGKEY_IPV6:
-			memcpy(&lease->ip6, attr->value,
-			       sizeof(struct wg_combined_ip));
-			break;
-		case WGKEY_LEASESTART:
-			memcpy(&lease_start, attr->value, sizeof(uint32_t));
-			break;
-		case WGKEY_LEASETIME:
-			memcpy(&lease->leasetime, attr->value,
-			       sizeof(uint32_t));
-			break;
-		case WGKEY_ERRNO:
-			memcpy(&ret, attr->value, sizeof(uint32_t));
-			if (ret) {
-				debug("Request IP failed with %ud from server\n",
-				      ret);
-				return -ret;
-			}
-			break;
-		case WGKEY_ERRMSG:
-			/* TODO: do something with the error message */
-			break;
-		default:
-			debug("Ignoring invalid attribute for request_ip: %d\n",
-			      attr->key);
+	while ((ret = clock_nanosleep(CLOCK_BOOTTIME, 0, &timeout, &rem))) {
+		if (ret == EINTR) {
+			check_signal();
+			memcpy(&timeout, &rem, sizeof timeout);
+			continue;
 		}
-		attr = attr->next;
+
+		die("clock_nanosleep(): %s\n", strerror(ret));
+	}
+}
+
+static void loop()
+{
+	struct wg_dynamic_request_ip rip = { 0 };
+	struct timespec tsend, trecv;
+	time_t expires, timeout;
+
+	if (clock_gettime(CLOCK_REALTIME, &tsend))
+		fatal("clock_gettime(CLOCK_REALTIME)");
+
+	if (request_ip(&rip)) {
+		/* TODO: implement some sort of exponential backoff */
+		debug("Server communication error, trying again in 30s\n");
+		xnanosleep(30);
+		return;
 	}
 
-	if (lease->leasetime == 0 || (lease->ip4.ip4.s_addr == 0 &&
-				      IN6_IS_ADDR_UNSPECIFIED(&lease->ip6.ip6)))
-		return -EINVAL;
+	if (clock_gettime(CLOCK_REALTIME, &trecv))
+		fatal("clock_gettime(CLOCK_REALTIME)");
 
-	if (abs(now - lease_start) < 15)
-		lease->start = lease_start;
+	if (tsend.tv_sec < rip.start + 5 || rip.start > trecv.tv_sec + 5)
+		expires = tsend.tv_sec + rip.leasetime;
 	else
-		lease->start = now;
+		expires = MIN(rip.leasetime, trecv.tv_sec) + rip.leasetime;
 
-	debug("Replacing lease %u -> %u\n", curleasetime,
-	      lease->start + lease->leasetime);
-
-	return 0;
-}
-
-static void cleanup()
-{
-	wg_free_device(device);
-	if (our_fd != -1 && close(our_fd))
-		debug("Failed to close fd %d\n", our_fd);
-}
-
-static bool handle_error(int fd, int ret)
-{
-	UNUSED(fd);
-	UNUSED(ret);
-
-	debug("Unable to parse response: %s\n", strerror(ret));
-
-	return true;
-}
-
-static void maybe_update_iface()
-{
-	if (memcmp(&our_gaddr4, &our_lease.ip4, sizeof our_gaddr4) ||
-	    our_gaddr4.cidr != our_lease.ip4.cidr) {
-		if (our_gaddr4.ip4.s_addr)
-			iface_remove_addr(device->ifindex, &our_gaddr4);
-		iface_add_addr(device->ifindex, &our_lease.ip4);
-		memcpy(&our_gaddr4, &our_lease.ip4, sizeof our_gaddr4);
-	}
-	if (memcmp(&our_gaddr6, &our_lease.ip6, sizeof our_gaddr6) ||
-	    our_gaddr6.cidr != our_lease.ip6.cidr) {
-		if (!IN6_IS_ADDR_UNSPECIFIED(&our_gaddr6.ip6))
-			iface_remove_addr(device->ifindex, &our_gaddr6);
-		iface_add_addr(device->ifindex, &our_lease.ip6);
-		memcpy(&our_gaddr6, &our_lease.ip6, sizeof our_gaddr6);
-	}
-}
-
-static bool handle_response(int fd, struct wg_dynamic_request *req)
-{
-	UNUSED(fd);
-
-#if 0
-	printf("Recieved response of type %s.\n", WG_DYNAMIC_KEY[req->cmd]);
-	struct wg_dynamic_attr *cur = req->first;
-	while (cur) {
-		printf("  with attr %s.\n", WG_DYNAMIC_KEY[cur->key]);
-		cur = cur->next;
-	}
-#endif
-
-	switch (req->cmd) {
-	case WGKEY_REQUEST_IP:
-		if (handle_received_lease(req) == 0)
-			maybe_update_iface();
-		break;
-	default:
-		debug("Unknown command: %d\n", req->cmd);
-		return true;
+	if (expires <= trecv.tv_sec) {
+		log_err("Warning: lease we tried to aquire already expired\n");
+		return;
 	}
 
-	return true;
+	/* TODO: implement random jitter */
+	timeout = (expires - trecv.tv_sec);
+	timeout -= MIN(30, timeout * 0.5);
+
+	debug("Sleeping for %zus\n", timeout);
+	xnanosleep(timeout);
 }
 
-int main(int argc __attribute__((unused)), char *argv[] __attribute__((unused)))
+int main(int argc, char *argv[])
 {
-	int *fd = &our_fd;
-	struct wg_dynamic_request req = { 0 };
-
 	progname = argv[0];
 	if (argc != 2)
 		usage();
 
 	wg_interface = argv[1];
+	setup();
 
-	if (wg_get_device(&device, wg_interface))
-		fatal("Unable to access interface %s", wg_interface);
-
-	if (atexit(cleanup))
-		die("Failed to set exit function\n");
-
-	if (!get_and_validate_local_addrs(device->ifindex, &our_lladdr,
-					  &our_gaddr4, &our_gaddr6))
-		die("%s needs to have an IPv6 link local address with prefixlen 128 assigned\n",
-		    wg_interface);
-	// TODO: verify that we have a peer with an allowed-ips including fe80::/128
-
-	char lladr_str[INET6_ADDRSTRLEN];
-	debug("%s: %s\n", wg_interface,
-	      inet_ntop(AF_INET6, &our_lladdr, lladr_str, sizeof lladr_str));
-
-	/* If we have an address configured, let's assume it's from a
-	 * lease in order to get renewal done. */
-	if (our_gaddr4.ip4.s_addr ||
-	    !IN6_IS_ADDR_UNSPECIFIED(&our_gaddr6.ip6)) {
-		our_lease.start = current_time();
-		our_lease.leasetime = 15;
-		memcpy(&our_lease.ip4, &our_gaddr4,
-		       sizeof(struct wg_combined_ip));
-		memcpy(&our_lease.ip6, &our_gaddr6,
-		       sizeof(struct wg_combined_ip));
-	}
-
-	while (1) {
-		sleep(time_until_refresh(current_time(), &our_lease));
-
-		if (*fd == -1 && try_connect(fd)) {
-			sleep(1);
-			continue;
-		}
-
-		request_ip(*fd, &our_lease);
-
-		while (!handle_request(&req, handle_response, handle_error))
-			;
-		close_connection(&req);
-	}
+	while (1)
+		loop();
 
 	return 0;
 }

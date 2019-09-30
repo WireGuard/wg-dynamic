@@ -15,20 +15,17 @@
 #include "netlink.h"
 
 #define MAX_CONNECTIONS 16
-
 #define MAX_LINESIZE 4096
-
 #define RECV_BUFSIZE 8192
-
 #define MAX_RESPONSE_SIZE 8192
 
 static const char WG_DYNAMIC_ADDR[] = "fe80::";
 static const uint16_t WG_DYNAMIC_PORT = 970; /* ASCII sum of "wireguard" */
-
-#define WG_DYNAMIC_LEASETIME 10 /* NOTE: 10s is good for testing purposes */
+#define WG_DYNAMIC_DEFAULT_LEASETIME 3600
 
 #define ITEMS                                                                  \
 	E(WGKEY_UNKNOWN, "") /* must be the first entry */                     \
+	E(WGKEY_EOMSG, "")                                                     \
 	/* CMD START */                                                        \
 	E(WGKEY_REQUEST_IP, "request_ip")                                      \
 	E(WGKEY_ENDCMD, "")                                                    \
@@ -62,21 +59,21 @@ static const char *const WG_DYNAMIC_ERR[] = { ITEMS };
 #undef E
 #undef ITEMS
 
-struct wg_dynamic_attr {
-	enum wg_dynamic_key key;
-	size_t len;
-	struct wg_dynamic_attr *next;
-	unsigned char value[];
-};
-
 struct wg_dynamic_request {
 	enum wg_dynamic_key cmd;
 	uint32_t version;
-	int fd;
-	wg_key pubkey;
 	unsigned char *buf;
-	size_t buflen;
-	struct wg_dynamic_attr *first, *last;
+	size_t len; /* <= MAX_LINESIZE */
+	void *result;
+};
+
+struct wg_dynamic_request_ip {
+	struct in_addr ipv4;
+	struct in6_addr ipv6;
+	uint8_t cidrv4, cidrv6;
+	uint32_t leasetime, start, wg_errno;
+	bool has_ipv4, has_ipv6;
+	char *errmsg;
 };
 
 struct wg_combined_ip {
@@ -90,15 +87,12 @@ struct wg_combined_ip {
 
 #define ARRAY_SIZE(arr) (sizeof(arr) / sizeof((arr)[0]))
 
+ssize_t handle_request(int fd, struct wg_dynamic_request *req,
+		       unsigned char buf[RECV_BUFSIZE + MAX_LINESIZE],
+		       size_t *remaining);
 void free_wg_dynamic_request(struct wg_dynamic_request *req);
-bool handle_request(struct wg_dynamic_request *req,
-		    bool (*success)(struct wg_dynamic_request *),
-		    bool (*error)(struct wg_dynamic_request *, int));
-bool send_message(struct wg_dynamic_request *req, const void *buf, size_t len);
+size_t serialize_request_ip(bool include_header, char *buf, size_t len,
+			    struct wg_dynamic_request_ip *rip);
 void print_to_buf(char *buf, size_t bufsize, size_t *offset, char *fmt, ...);
-uint32_t current_time();
-void close_connection(struct wg_dynamic_request *req);
 bool is_link_local(unsigned char *addr);
-void iface_get_all_addrs(uint8_t family, mnl_cb_t data_cb, void *cb_data);
-int data_attr_cb(const struct nlattr *attr, void *data);
 #endif
