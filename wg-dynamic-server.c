@@ -34,6 +34,7 @@ static struct in6_addr well_known;
 
 static wg_device *device = NULL;
 static struct wg_dynamic_request requests[MAX_CONNECTIONS] = { 0 };
+static uint32_t leasetime = WG_DYNAMIC_DEFAULT_LEASETIME;
 
 static int sockfd = -1;
 static int epollfd = -1;
@@ -49,7 +50,7 @@ struct mnl_cb_data {
 
 static void usage()
 {
-	die("usage: %s <wg-interface>\n", progname);
+	die("usage: %s <wg-interface> [<leasetime>]\n", progname);
 }
 
 static int data_cb(const struct nlmsghdr *nlh, void *data)
@@ -377,7 +378,6 @@ static int response_request_ip(struct wg_dynamic_attr *cur, wg_key pubkey,
 {
 	struct in_addr *ipv4 = NULL;
 	struct in6_addr *ipv6 = NULL;
-	uint32_t leasetime = WG_DYNAMIC_LEASETIME;
 	struct wg_dynamic_lease *current = NULL;
 
 	while (cur) {
@@ -647,10 +647,17 @@ static void poll_loop()
 int main(int argc, char *argv[])
 {
 	progname = argv[0];
-	if (argc != 2)
+	if (argc < 2 || argc > 3)
 		usage();
 
 	wg_interface = argv[1];
+	if (argc == 3) {
+		char *endptr;
+		leasetime = (uint32_t) strtoul(argv[2], &endptr, 10);
+		if (*endptr)
+			usage();
+	}
+
 	setup();
 
 	poll_loop();
