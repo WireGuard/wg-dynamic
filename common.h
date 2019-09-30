@@ -74,6 +74,7 @@ struct wg_dynamic_request {
 	uint32_t version;
 	int fd;
 	wg_key pubkey;
+	struct in6_addr lladdr;
 	unsigned char *buf;
 	size_t buflen;
 	struct wg_dynamic_attr *first, *last;

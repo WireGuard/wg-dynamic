@@ -14,6 +14,7 @@
 #include <stdlib.h>
 #include <sys/socket.h>
 #include <time.h>
+#include <string.h>
 
 #include "common.h"
 #include "dbg.h"
@@ -91,7 +92,8 @@ void leases_free()
 }
 
 struct wg_dynamic_lease *new_lease(wg_key pubkey, uint32_t leasetime,
-				   struct in_addr *ipv4, struct in6_addr *ipv6)
+				   struct in_addr *ipv4, struct in6_addr *ipv6,
+				   const struct in6_addr *lladdr)
 {
 	struct wg_dynamic_lease *lease, *parent;
 	uint64_t index_l;
@@ -152,6 +154,8 @@ struct wg_dynamic_lease *new_lease(wg_key pubkey, uint32_t leasetime,
 		}
 	}
 
+	memcpy(&lease->lladdr, lladdr, sizeof(lease->lladdr));
+
 	if (clock_gettime(CLOCK_REALTIME, &tp))
 		fatal("clock_gettime(CLOCK_REALTIME)");
 
@@ -203,15 +207,117 @@ bool extend_lease(struct wg_dynamic_lease *lease, uint32_t leasetime)
 	return false;
 }
 
-int leases_refresh()
+struct allowedips_update {
+	wg_key peer_pubkey;
+	struct in_addr ipv4;
+	struct in6_addr ipv6;
+	struct in6_addr lladdr;
+};
+
+static char *updates_to_str(const struct allowedips_update *u)
+{
+	static char buf[4096];
+	wg_key_b64_string pubkey_asc;
+	char v4[INET_ADDRSTRLEN], v6[INET6_ADDRSTRLEN], ll[INET6_ADDRSTRLEN];
+
+
+	if (!u)
+		return "(null)";
+
+	wg_key_to_base64(pubkey_asc, u->peer_pubkey);
+	inet_ntop(AF_INET, &u->ipv4, v4, sizeof v4);
+	inet_ntop(AF_INET6, &u->ipv6, v6, sizeof v6);
+	inet_ntop(AF_INET6, &u->lladdr, ll, sizeof ll);
+	snprintf(buf, sizeof buf, "(%p) %s [%s] [%s]", u, v4, v6, ll);
+
+	return buf;
+}
+
+static void update_allowed_ips_bulk(const char *devname,
+				    const struct allowedips_update *updates,
+				    int nupdates)
+{
+	wg_peer peers[WG_DYNAMIC_LEASE_CHUNKSIZE] = { 0 };
+	wg_allowedip allowedips[3 * WG_DYNAMIC_LEASE_CHUNKSIZE] = { 0 };
+	wg_device dev = { 0 };
+	wg_peer **pp = &dev.first_peer;
+
+	int peer_idx = 0;
+	int allowedips_idx = 0;
+	for (int i = 0; i < nupdates; i++) {
+
+		debug("setting allowedips for %s\n", updates_to_str(&updates[i]));
+
+		peers[peer_idx].flags |= WGPEER_REPLACE_ALLOWEDIPS;
+		memcpy(peers[peer_idx].public_key, updates[i].peer_pubkey, sizeof(wg_key));
+		wg_allowedip **aipp = &peers[peer_idx].first_allowedip;
+
+		/* TODO: move to a function */
+		if (updates[i].ipv4.s_addr) {
+			allowedips[allowedips_idx] = (wg_allowedip){
+				.family = AF_INET,
+				.cidr = 32,
+				.ip4 = updates[i].ipv4,
+			};
+			*aipp = &allowedips[allowedips_idx];
+			aipp = &allowedips[allowedips_idx].next_allowedip;
+			++allowedips_idx;
+		}
+		if (!IN6_IS_ADDR_UNSPECIFIED(&updates[i].ipv6)) {
+			allowedips[allowedips_idx] = (wg_allowedip){
+				.family = AF_INET6,
+				.cidr = 128,
+				.ip6 = updates[i].ipv6,
+			};
+			*aipp = &allowedips[allowedips_idx];
+			aipp = &allowedips[allowedips_idx].next_allowedip;
+			++allowedips_idx;
+		}
+		if (!IN6_IS_ADDR_UNSPECIFIED(&updates[i].lladdr)) {
+			allowedips[allowedips_idx] = (wg_allowedip){
+				.family = AF_INET6,
+				.cidr = 128,
+				.ip6 = updates[i].lladdr,
+			};
+			*aipp = &allowedips[allowedips_idx];
+			//aipp = &allowedips[allowedips_idx].next_allowedip;
+			++allowedips_idx;
+		}
+
+		*pp = &peers[peer_idx];
+		pp = &peers[peer_idx].next_peer;
+		++peer_idx;
+	}
+
+	strncpy(dev.name, devname, sizeof(dev.name) - 1);
+	if (wg_set_device(&dev))
+		fatal("wg_set_device()");
+}
+
+void update_allowed_ips(const char *devname, wg_key peer_pubkey,
+			const struct wg_dynamic_lease *lease)
+{
+	struct allowedips_update update;
+
+	memcpy(update.peer_pubkey, peer_pubkey, sizeof(wg_key));
+	memcpy(&update.ipv4, &lease->ipv4, sizeof(struct in_addr));
+	memcpy(&update.ipv6, &lease->ipv6, sizeof(struct in6_addr));
+	memcpy(&update.lladdr, &lease->lladdr, sizeof(struct in6_addr));
+
+	update_allowed_ips_bulk(devname, &update, 1);
+}
+
+int leases_refresh(const char *devname)
 {
 	time_t cur_time = get_monotonic_time();
+	struct allowedips_update updates[WG_DYNAMIC_LEASE_CHUNKSIZE] = { 0 };
 
 	if (cur_time < gexpires)
 		return MIN(INT_MAX / 1000, gexpires - cur_time);
 
 	gexpires = TIME_T_MAX;
 
+	int i = 0;
 	for (khint_t k = kh_begin(leases_ht); k != kh_end(leases_ht); ++k) {
 		if (!kh_exist(leases_ht, k))
 			continue;
@@ -228,6 +334,23 @@ int leases_refresh()
 				if (!IN6_IS_ADDR_UNSPECIFIED(ipv6))
 					ipp_del_v6(&pool, ipv6, 128);
 
+				memcpy(updates[i].peer_pubkey, kh_key(leases_ht, k),
+				       sizeof(wg_key));
+				updates[i].lladdr = (*pp)->lladdr;
+				{
+					wg_key_b64_string pubkey_asc;
+					wg_key_to_base64(pubkey_asc,
+							 updates[i].peer_pubkey);
+					debug("Peer losing its lease: %s\n",
+					      pubkey_asc);
+				}
+				i++;
+				if (i == WG_DYNAMIC_LEASE_CHUNKSIZE) {
+					update_allowed_ips_bulk(devname, updates, i);
+					i = 0;
+					memset(updates, 0, sizeof updates);
+				}
+
 				tmp = *pp;
 				*pp = (*pp)->next;
 				free(tmp);
@@ -238,6 +361,9 @@ int leases_refresh()
 				pp = &(*pp)->next;
 			}
 		}
+
+		if (i)
+			update_allowed_ips_bulk(devname, updates, i);
 
 		if (!kh_val(leases_ht, k)) {
 			free((char *)kh_key(leases_ht, k));
