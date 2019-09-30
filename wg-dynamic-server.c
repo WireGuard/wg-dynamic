@@ -6,6 +6,7 @@
 #define _GNU_SOURCE
 #define _POSIX_C_SOURCE 200112L
 
+#include <getopt.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -28,11 +29,12 @@
 #include "netlink.h"
 
 static const char *progname;
-static const char *wg_interface;
+static const char *wg_interface = NULL;
 static struct in6_addr well_known;
 
 static wg_device *device = NULL;
 static struct wg_dynamic_request requests[MAX_CONNECTIONS] = { 0 };
+static uint32_t leasetime = 3600;
 
 static int sockfd = -1;
 static int epollfd = -1;
@@ -48,7 +50,9 @@ struct mnl_cb_data {
 
 static void usage()
 {
-	die("usage: %s <wg-interface>\n", progname);
+	fprintf(stderr, "usage: %s [--leasetime <leasetime>] <wg-interface>\n",
+		progname);
+	exit(EXIT_FAILURE);
 }
 
 static int data_cb(const struct nlmsghdr *nlh, void *data)
@@ -269,7 +273,6 @@ static int response_request_ip(struct wg_dynamic_attr *cur, wg_key pubkey,
 {
 	struct in_addr *ipv4 = NULL;
 	struct in6_addr *ipv6 = NULL;
-	uint32_t leasetime = WG_DYNAMIC_LEASETIME;
 
 	while (cur) {
 		switch (cur->key) {
@@ -529,10 +532,38 @@ static void poll_loop()
 int main(int argc, char *argv[])
 {
 	progname = argv[0];
-	if (argc != 2)
+
+	while (1) {
+		int ret, index;
+		char *endptr = NULL;
+		const struct option options[] = {
+			{ "leasetime", required_argument, NULL, 0 },
+			{ 0, 0, 0, 0 }
+		};
+
+		ret = getopt_long(argc, argv, "", options, &index);
+		if (ret == -1)
+			break;
+
+		switch (ret) {
+		case 0:
+			if (index != 0)
+				usage();
+			leasetime = (uint32_t)strtoul(optarg, &endptr, 10);
+			if (*endptr)
+				usage();
+			break;
+		default:
+			usage();
+		}
+	}
+
+	if (optind < argc)
+		wg_interface = argv[optind++];
+
+	if (!wg_interface || optind < argc)
 		usage();
 
-	wg_interface = argv[1];
 	setup();
 
 	poll_loop();

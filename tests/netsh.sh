@@ -85,4 +85,4 @@ n2 wg set wg0 peer "$server_public" endpoint [::1]:1
 n2 ping6 -c 10 -f -W 1 fe80::%wg0
 n1 ping6 -c 10 -f -W 1 fe80::badc:0ffe:e0dd:f00d%wg0
 
-n1 ./wg-dynamic-server wg0
+n1 ./wg-dynamic-server --leasetime 10 wg0
