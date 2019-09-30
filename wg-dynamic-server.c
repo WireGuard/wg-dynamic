@@ -28,11 +28,12 @@
 #include "netlink.h"
 
 static const char *progname;
-static const char *wg_interface;
+static const char *wg_interface = NULL;
 static struct in6_addr well_known;
 
 static wg_device *device = NULL;
 static struct wg_dynamic_request requests[MAX_CONNECTIONS] = { 0 };
+static uint32_t leasetime = WG_DYNAMIC_DEFAULT_LEASETIME;
 
 static int sockfd = -1;
 static int epollfd = -1;
@@ -48,7 +49,7 @@ struct mnl_cb_data {
 
 static void usage()
 {
-	die("usage: %s <wg-interface>\n", progname);
+	die("usage: %s [--leasetime <leasetime>] <wg-interface>\n", progname);
 }
 
 static int data_cb(const struct nlmsghdr *nlh, void *data)
@@ -269,7 +270,6 @@ static int response_request_ip(struct wg_dynamic_attr *cur, wg_key pubkey,
 {
 	struct in_addr *ipv4 = NULL;
 	struct in6_addr *ipv6 = NULL;
-	uint32_t leasetime = WG_DYNAMIC_LEASETIME;
 
 	while (cur) {
 		switch (cur->key) {
@@ -528,11 +528,29 @@ static void poll_loop()
 
 int main(int argc, char *argv[])
 {
+	char *endptr = NULL;
+
 	progname = argv[0];
-	if (argc != 2)
+	++argv;
+	--argc;
+
+	while (argc > 0) {
+		if (!strcmp(argv[0], "--leasetime") && argc >= 2) {
+			leasetime = (uint32_t) strtoul(argv[1], &endptr, 10);
+			if (*endptr)
+				usage();
+			argv += 2;
+			argc -= 2;
+		} else {
+			wg_interface = argv[0];
+			argv += 1;
+			argc -= 1;
+			break;
+		}
+	}
+	if (!wg_interface || argc > 0)
 		usage();
 
-	wg_interface = argv[1];
 	setup();
 
 	poll_loop();
