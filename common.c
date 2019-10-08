@@ -207,7 +207,6 @@ static ssize_t parse_request(struct wg_dynamic_request *req, unsigned char *buf,
 			     size_t len)
 {
 	ssize_t ret, offset = 0;
-	size_t addlen = 0;
 	enum wg_dynamic_key key;
 	union kvalues kv;
 	void (*deserialize)(enum wg_dynamic_key key, union kvalues kv,
@@ -215,17 +214,6 @@ static ssize_t parse_request(struct wg_dynamic_request *req, unsigned char *buf,
 
 	if (memchr(buf, '\0', len))
 		return -EINVAL; /* don't allow null bytes */
-
-	if (req->len > 0 && req->buf) {
-		len += req->len;
-
-		memmove(buf + req->len, buf, len);
-		memcpy(buf, req->buf, req->len);
-		addlen = req->len;
-		free(req->buf);
-		req->buf = NULL;
-		req->len = 0;
-	}
 
 	if (req->cmd == WGKEY_UNKNOWN) {
 		ret = parse_line(buf, len, req, &req->cmd, &kv);
@@ -255,7 +243,7 @@ static ssize_t parse_request(struct wg_dynamic_request *req, unsigned char *buf,
 		offset += ret;
 
 		if (key == WGKEY_EOMSG)
-			return offset - addlen;
+			return offset;
 		else if (key == WGKEY_UNKNOWN)
 			continue;
 		else if (key <= WGKEY_ENDCMD)
@@ -272,12 +260,16 @@ ssize_t handle_request(int fd, struct wg_dynamic_request *req,
 		       size_t *remaining)
 {
 	ssize_t bytes, processed;
+	size_t leftover;
+
+	BUG_ON((*remaining > 0 && req->buf) || (req->buf && !req->len));
 
 	do {
+		leftover = req->len;
 		if (*remaining > 0)
 			bytes = *remaining;
 		else
-			bytes = read(fd, buf, RECV_BUFSIZE);
+			bytes = read(fd, buf + leftover, RECV_BUFSIZE);
 
 		if (bytes < 0) {
 			if (errno == EWOULDBLOCK || errno == EAGAIN ||
@@ -291,12 +283,21 @@ ssize_t handle_request(int fd, struct wg_dynamic_request *req,
 			return -1;
 		}
 
-		processed = parse_request(req, buf, bytes);
+		if (req->buf) {
+			memcpy(buf, req->buf, leftover);
+			free(req->buf);
+			req->buf = NULL;
+			req->len = 0;
+		}
+
+		processed = parse_request(req, buf, bytes + leftover);
 		if (processed < 0)
 			return processed; /* Parsing error */
+		if (!processed)
+			*remaining = 0;
 	} while (processed == 0);
 
-	*remaining = bytes - processed;
+	*remaining = (bytes + leftover) - processed;
 	memmove(buf, buf + processed, *remaining);
 
 	return 1;

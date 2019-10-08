@@ -68,7 +68,7 @@ static void check_signal()
 static int request_ip(struct wg_dynamic_request_ip *rip)
 {
 	unsigned char buf[RECV_BUFSIZE + MAX_LINESIZE];
-	size_t msglen, remaining, off = 0;
+	size_t msglen, remaining = 0, off = 0;
 	struct sockaddr_in6 dstaddr = {
 		.sin6_family = AF_INET6,
 		.sin6_addr = well_known,
