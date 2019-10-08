@@ -208,9 +208,9 @@ test_case_1() {
     # One client -- 3.
     setup_client_peer 3
 
-    pretty 3 "Badly formed request => errno=1 -- EXPECTED FAILURE: errno=2"
-    send_cmd 3 "ip_request=\n\n"
-    [[ ${ERRNO[3]} = 2 ]] || fail "errno: ${ERRNO[3]}"
+    pretty 3 "Badly formed request => no response"
+    send_cmd 3 "request_ip=\n\n"
+    [[ -z "${ERRNO[3]}" ]] || fail "errno: ${ERRNO[3]}"
 
     ## Check disabled 2019-09-27. Enable again when ipp_add_v4() and
     ## ipp_add_v6() have checks.
