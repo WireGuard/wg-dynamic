@@ -239,11 +239,11 @@ test_case_2() {
 
     pretty 4 "Extend v4, drop v6"
     req_check 4 $C4_FIRST_V4 "-"
-    [[ ${ERRNO[4]} = 0 ]] || fail "errno: ${ERRNO[4]}"
-    [[ ${IPV4[4]} = $C4_FIRST_V4  ]] || fail "ipv4: ${IPV4[4]}"
-    [[ -z "${IPV6[4]}" ]] || fail "ipv6: ${IPV6[4]}"
+    [[ ${ERRNO[4]} = 0 ]] || fail "errno: ${ERRNO[4]} != 0"
+    [[ ${IPV4[4]} = $C4_FIRST_V4  ]] || fail "ipv4: ${IPV4[4]} != $C4_FIRST_V4"
+    [[ ${IPV6[4]} = ::/128 ]] || fail "ipv6: ${IPV6[4]} != ::/128"
 
-    pretty 5 "Requesting the v4 of client 4 and no v6 => errno=0 and no addrs"
+    pretty 5 "Requesting the v4 of client 4 and no v6 => errno=2"
     req 5 $C4_FIRST_V4 "-"
     [[ ${ERRNO[5]} = 2 ]] || fail "errno: ${ERRNO[5]}"
     [[ -z "${IPV4[5]}" ]] || fail "ipv4 not empty: ${IPV4[5]}"
@@ -253,8 +253,9 @@ test_case_2() {
     pp sleep ${LEASETIME[4]}
     req_check 5 $C4_FIRST_V4 "-"
     [[ ${ERRNO[5]} = 0 ]] || fail "errno: ${ERRNO[5]}"
-    [[ ${IPV4[5]} = $C4_FIRST_V4  ]] || fail "ipv4: ${IPV4[5]}"
-    [[ -z "${IPV6[5]}" ]] || fail "ipv6 not empty: ${IPV6[5]}"
+    [[ ${IPV4[5]} = $C4_FIRST_V4  ]] || fail "ipv4: ${IPV4[5]} != $C4_FIRST_V4"
+    [[ ${IPV6[5]} = ::/128 ]] || fail "ipv6: ${IPV6[5]} != ::/128"
+
 
     pretty "" "SUCCESS\n"
 }
