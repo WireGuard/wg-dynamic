@@ -628,7 +628,7 @@ int ipp_removepool_v6(struct ipns *ns, const struct in6_addr *ip)
 
 void ipp_addnth_v4(struct ipns *ns, struct in_addr *dest, uint32_t index)
 {
-	struct radix_pool *current = ns->ip4_pools;
+	struct radix_pool *current;
 
 	for (current = ns->ip4_pools; current; current = current->next) {
 		if (current->shadowed)
@@ -649,18 +649,18 @@ void ipp_addnth_v4(struct ipns *ns, struct in_addr *dest, uint32_t index)
 void ipp_addnth_v6(struct ipns *ns, struct in6_addr *dest, uint32_t index_low,
 		   uint64_t index_high)
 {
-	struct radix_pool *current = ns->ip6_pools;
+	struct radix_pool *current;
 	uint64_t tmp;
 
-	while (current) {
+	for (current = ns->ip6_pools; current; current = current->next) {
 		if (current->shadowed ||
-		    (current->node->left == 0 && current->node->right == 0)) {
-			current = current->next;
+		    (current->node->left == 0 && current->node->right == 0))
 			continue;
-		}
 
-		if (index_high == 0 &&
-		    index_low < (current->node->left + current->node->right))
+		/* left + right may overflow, so we substract 1 which is safe
+		 * since we ensured it's > 0 except when the total is 2^64 */
+		if (index_high == 0 && index_low <= (current->node->left +
+						     current->node->right - 1))
 			break;
 
 		tmp = index_low - (current->node->left + current->node->right);
@@ -669,8 +669,6 @@ void ipp_addnth_v6(struct ipns *ns, struct in6_addr *dest, uint32_t index_low,
 			--index_high;
 		}
 		index_low = tmp;
-
-		current = current->next;
 	}
 
 	BUG_ON(!current || index_high);
