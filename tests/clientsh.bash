@@ -256,12 +256,31 @@ test_case_2() {
     [[ ${IPV4[5]} = $C4_FIRST_V4  ]] || fail "ipv4: ${IPV4[5]} != $C4_FIRST_V4"
     [[ ${IPV6[5]} = ::/128 ]] || fail "ipv6: ${IPV6[5]} != ::/128"
 
+    pretty "" "SUCCESS\n"
+}
+
+test_case_3() {
+    # Two clients -- 6 and 7.
+    for i in 6 7; do setup_client_peer $i; done
+
+    pretty 6 "Any v4, any v6"
+    req_check 6
+    [[ ${ERRNO[6]} = 0 ]] || fail "errno: ${ERRNO[6]}"
+    local C6_FIRST_V4=${IPV4[6]}
+    local C6_FIRST_V6=${IPV6[6]}
+
+    pretty 6 "Drop v4, extend v6"
+    req_check 6 "-" $C6_FIRST_V6
+    [[ ${ERRNO[6]} = 0 ]] || fail "errno: ${ERRNO[6]} != 0"
+    [[ ${IPV4[6]} = 0.0.0.0/32  ]] || fail "ipv4: ${IPV4[6]} != 0.0.0.0/32"
+    [[ ${IPV6[6]} = $C6_FIRST_V6 ]] || fail "ipv6: ${IPV6[6]} != $C6_FIRST_V6"
 
     pretty "" "SUCCESS\n"
 }
 
 test_case_1
 test_case_2
+test_case_3
 
 N_RANDOM=20
 K_RANDOM=4
