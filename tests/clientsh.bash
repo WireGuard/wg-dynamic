@@ -144,8 +144,8 @@ req_check() {
     req $*
 
     pubkey=$(nn -q $n wg show wg0 public-key)
-    check_alowedips $n "$pubkey" "${IPV4[$n]}"
-    check_alowedips $n "$pubkey" "${IPV6[$n]}"
+    [[ "${IPV4[$n]}" = "0.0.0.0/32" ]] || check_alowedips $n "$pubkey" "${IPV4[$n]}"
+    [[ "${IPV6[$n]}" = "::/128" ]] || check_alowedips $n "$pubkey" "${IPV6[$n]}"
 }
 
 run_k_at_random() {
