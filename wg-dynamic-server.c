@@ -530,7 +530,7 @@ static void init_leaess_from_peers()
 			if (allowedip->family == AF_INET6 &&
 			    IN6_IS_ADDR_LINKLOCAL(&allowedip->ip6))
 				lladdr = &allowedip->ip6;
-			if (allowedip->family == AF_INET && !ipv4)
+			else if (allowedip->family == AF_INET && !ipv4)
 				ipv4 = &allowedip->ip4;
 			else if (allowedip->family == AF_INET6 && !ipv6)
 				ipv6 = &allowedip->ip6;
