@@ -29,7 +29,7 @@
 #include "netlink.h"
 
 static const char *progname;
-static const char *wg_interface;
+static const char *wg_interface = NULL;
 static struct in6_addr well_known;
 
 static wg_device *device = NULL;
@@ -50,7 +50,7 @@ struct mnl_cb_data {
 
 static void usage()
 {
-	die("usage: %s <wg-interface> <leasetime>\n", progname);
+	die("usage: %s [--leasetime <leasetime>] <wg-interface>\n", progname);
 }
 
 static int data_cb(const struct nlmsghdr *nlh, void *data)
@@ -649,12 +649,24 @@ int main(int argc, char *argv[])
 	char *endptr = NULL;
 
 	progname = argv[0];
-	if (argc != 3)
-		usage();
+	++argv;
+	--argc;
 
-	wg_interface = argv[1];
-	leasetime = (uint32_t) strtoul(argv[2], &endptr, 10);
-	if (*endptr)
+	while (argc > 0) {
+		if (!strcmp(argv[0], "--leasetime") && argc >= 2) {
+			leasetime = (uint32_t) strtoul(argv[1], &endptr, 10);
+			if (*endptr)
+				usage();
+			argv += 2;
+			argc -= 2;
+		} else {
+			wg_interface = argv[0];
+			argv += 1;
+			argc -= 1;
+			break;
+		}
+	}
+	if (!wg_interface || argc > 0)
 		usage();
 
 	setup();
