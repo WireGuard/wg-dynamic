@@ -86,4 +86,4 @@ echo
 echo wg-test-$$ $server_public
 echo
 
-nn 1 ./wg-dynamic-server --leasetime 10 wg0
+nn 1 gdb -ex r --args ./wg-dynamic-server --leasetime 10 wg0

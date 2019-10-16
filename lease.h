@@ -28,7 +28,7 @@ struct wg_dynamic_lease {
  * Initializes internal state, retrieves routes from nlsock and reads leases
  * from fname.
  */
-void leases_init(char *fname, struct mnl_socket *nlsock);
+void leases_init(char *fname, struct mnl_socket *nlsock, uint32_t ifindex);
 
 /*
  * Frees everything, closes file.
@@ -67,7 +67,7 @@ void update_allowed_ips(const char *devname, wg_key peer_pubkey,
 /*
  * Updates all pools with information from the mnl socket nlsock.
  */
-void leases_update_pools(struct mnl_socket *nlsock);
+void leases_update_pools(struct mnl_socket *nlsock, uint32_t ifindex);
 
 /*
  * Return true if lease is !NULL and has not expired.
