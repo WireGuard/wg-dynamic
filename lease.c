@@ -52,7 +52,7 @@ static time_t get_monotonic_time()
 	return monotime.tv_sec;
 }
 
-void leases_init(char *fname, struct mnl_socket *nlsock)
+void leases_init(char *fname, struct mnl_socket *nlsock, uint32_t ifindex)
 {
 	struct nlmsghdr *nlh;
 	struct rtmsg *rtm;
@@ -73,7 +73,7 @@ void leases_init(char *fname, struct mnl_socket *nlsock)
 	if (mnl_socket_sendto(nlsock, nlh, nlh->nlmsg_len) < 0)
 		fatal("mnl_socket_sendto()");
 
-	leases_update_pools(nlsock);
+	leases_update_pools(nlsock, ifindex);
 	synchronized = true;
 
 	UNUSED(fname); /* TODO: open file and initialize from it */
@@ -386,6 +386,12 @@ static int data_ipv4_attr_cb(const struct nlattr *attr, void *data)
 			return MNL_CB_ERROR;
 		}
 		break;
+	case RTA_OIF:
+		if (mnl_attr_validate(attr, MNL_TYPE_U32) < 0) {
+			log_err("mnl_attr_validate: %s\n", strerror(errno));
+			return MNL_CB_ERROR;
+		}
+		break;
 	default:
 		return MNL_CB_OK;
 	}
@@ -407,6 +413,12 @@ static int data_ipv6_attr_cb(const struct nlattr *attr, void *data)
 			return MNL_CB_ERROR;
 		}
 		break;
+	case RTA_OIF:
+		if (mnl_attr_validate(attr, MNL_TYPE_U32) < 0) {
+			log_err("mnl_attr_validate: %s\n", strerror(errno));
+			return MNL_CB_ERROR;
+		}
+		break;
 	default:
 		return MNL_CB_OK;
 	}
@@ -418,12 +430,21 @@ static int process_nlpacket_cb(const struct nlmsghdr *nlh, void *data)
 {
 	struct nlattr *tb[RTA_MAX + 1] = {};
 	struct rtmsg *rm = mnl_nlmsg_get_payload(nlh);
-	UNUSED(data);
+	uint32_t ifindex;
+
+	BUG_ON(!data);
+	ifindex = *((int *)data);
 
 	if (rm->rtm_family == AF_INET)
 		mnl_attr_parse(nlh, sizeof(*rm), data_ipv4_attr_cb, tb);
 	else if (rm->rtm_family == AF_INET6)
 		mnl_attr_parse(nlh, sizeof(*rm), data_ipv6_attr_cb, tb);
+
+	if (!tb[RTA_OIF] || mnl_attr_get_u32(tb[RTA_OIF]) != ifindex) {
+		debug("ignoring interface %u (want %u)\n",
+		      tb[RTA_OIF] ? mnl_attr_get_u32(tb[RTA_OIF]) : 0, ifindex);
+		return MNL_CB_OK;
+	}
 
 	if (tb[RTA_GATEWAY])
 		return MNL_CB_OK;
@@ -459,13 +480,14 @@ static int process_nlpacket_cb(const struct nlmsghdr *nlh, void *data)
 	return MNL_CB_OK;
 }
 
-void leases_update_pools(struct mnl_socket *nlsock)
+void leases_update_pools(struct mnl_socket *nlsock, uint32_t ifindex)
 {
 	int ret;
 	char buf[MNL_SOCKET_BUFFER_SIZE];
 
 	while ((ret = mnl_socket_recvfrom(nlsock, buf, sizeof buf)) > 0) {
-		if (mnl_cb_run(buf, ret, 0, 0, process_nlpacket_cb, NULL) == -1)
+		if (mnl_cb_run(buf, ret, 0, 0, process_nlpacket_cb,
+			       (void *)&ifindex) == -1)
 			fatal("mnl_cb_run()");
 	}
 

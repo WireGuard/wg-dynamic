@@ -453,7 +453,7 @@ static void setup()
 		    wg_interface);
 
 	setup_sockets();
-	leases_init(NULL, nlsock);
+	leases_init(NULL, nlsock, device->ifindex);
 	init_leases_from_peers();
 }
 
@@ -509,7 +509,7 @@ static void handle_event(void *ptr, uint32_t events)
 	}
 
 	if (ptr == nlsock) {
-		leases_update_pools(nlsock);
+		leases_update_pools(nlsock, device->ifindex);
 		return;
 	}
 

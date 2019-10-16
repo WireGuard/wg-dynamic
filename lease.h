@@ -28,7 +28,7 @@ struct wg_dynamic_lease {
  * Initializes internal state, retrieves routes from nlsock and reads leases
  * from fname.
  */
-void leases_init(char *fname, struct mnl_socket *nlsock);
+void leases_init(char *fname, struct mnl_socket *nlsock, uint32_t ifindex);
 
 /*
  * Frees everything, closes file.
@@ -60,6 +60,6 @@ int leases_refresh(const char *devname);
 /*
  * Updates all pools with information from the mnl socket nlsock.
  */
-void leases_update_pools(struct mnl_socket *nlsock);
+void leases_update_pools(struct mnl_socket *nlsock, uint32_t ifindex);
 
 #endif
