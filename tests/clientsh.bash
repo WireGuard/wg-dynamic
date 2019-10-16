@@ -148,8 +148,8 @@ req_check() {
     req $*
 
     pubkey=$(nn -q $n wg show wg0 public-key)
-    check_alowedips $n "$pubkey" "${IPV4[$n]}"
-    check_alowedips $n "$pubkey" "${IPV6[$n]}"
+    [[ "${IPV4[$n]}" = "0.0.0.0/32" ]] || check_alowedips $n "$pubkey" "${IPV4[$n]}"
+    [[ "${IPV6[$n]}" = "::/128" ]] || check_alowedips $n "$pubkey" "${IPV6[$n]}"
 }
 
 run_k_at_random() {
@@ -219,9 +219,9 @@ test_case_1() {
     # One client -- 3.
     setup_client_peer 3
 
-    pretty 3 "Badly formed request => errno=1 -- EXPECTED FAILURE: errno=2"
-    send_cmd 3 "ip_request=\n\n"
-    [[ ${ERRNO[3]} = 2 ]] || fail "errno: ${ERRNO[3]}"
+    pretty 3 "Badly formed request => no response"
+    send_cmd 3 "request_ip=\n\n"
+    [[ -z "${ERRNO[3]}" ]] || fail "errno: ${ERRNO[3]}"
 
     ## Check disabled 2019-09-27. Enable again when ipp_add_v4() and
     ## ipp_add_v6() have checks.
@@ -250,22 +250,24 @@ test_case_2() {
 
     pretty 4 "Extend v4, drop v6"
     req_check 4 $C4_FIRST_V4 "-"
-    [[ ${ERRNO[4]} = 0 ]] || fail "errno: ${ERRNO[4]}"
-    [[ ${IPV4[4]} = $C4_FIRST_V4  ]] || fail "ipv4: ${IPV4[4]}"
-    [[ -z "${IPV6[4]}" ]] || fail "ipv6: ${IPV6[4]}"
+    [[ ${ERRNO[4]} = 0 ]] || fail "errno: ${ERRNO[4]} != 0"
+    [[ ${IPV4[4]} = $C4_FIRST_V4  ]] || fail "ipv4: ${IPV4[4]} != $C4_FIRST_V4"
+    [[ ${IPV6[4]} = ::/128 ]] || fail "ipv6: ${IPV6[4]} != ::/128"
 
-    pretty 5 "Requesting the v4 of client 4 and no v6 => errno=0 and no addrs"
+    pretty 5 "Requesting the v4 of client 4 and no v6 => errno=2"
     req 5 $C4_FIRST_V4 "-"
     [[ ${ERRNO[5]} = 2 ]] || fail "errno: ${ERRNO[5]}"
     [[ -z "${IPV4[5]}" ]] || fail "ipv4 not empty: ${IPV4[5]}"
     [[ -z "${IPV6[5]}" ]] || fail "ipv6 not empty: ${IPV6[5]}"
 
-    pretty 5 "Wait for lease to expire and try again"
-    pp sleep ${LEASETIME[4]}
-    req_check 5 $C4_FIRST_V4 "-"
-    [[ ${ERRNO[5]} = 0 ]] || fail "errno: ${ERRNO[5]}"
-    [[ ${IPV4[5]} = $C4_FIRST_V4  ]] || fail "ipv4: ${IPV4[5]} != $C4_FIRST_V4"
-    [[ -z "${IPV6[5]}" ]] || fail "ipv6 not empty: ${IPV6[5]}"
+    if [[ ${LEASETIME[4]} -le 10 ]]; then
+	pretty 5 "Wait for lease to expire and try again"
+	pp sleep ${LEASETIME[4]}
+	req_check 5 $C4_FIRST_V4 "-"
+	[[ ${ERRNO[5]} = 0 ]] || fail "errno: ${ERRNO[5]}"
+	[[ ${IPV4[5]} = $C4_FIRST_V4  ]] || fail "ipv4: ${IPV4[5]} != $C4_FIRST_V4"
+	[[ ${IPV6[5]} = ::/128 ]] || fail "ipv6: ${IPV6[5]} != ::/128"
+    fi
 
     pretty "" "SUCCESS\n"
 }
