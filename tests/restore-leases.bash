@@ -1,13 +1,5 @@
-#!/bin/bash
-# SPDX-License-Identifier: GPL-2.0
-#
-# Copyright (C) 2015-2019 Jason A. Donenfeld <Jason@zx2c4.com>. All Rights Reserved.
-
 set -e
-
 exec 3>&1
-
-[ $# -ge 1 ] && ( n_clients="$1"; shift; )
 
 export WG_HIDE_KEYS=never
 netnsn() { echo wg-test-$$-$1; }
@@ -86,4 +78,85 @@ echo
 echo wg-test-$$ $server_public
 echo
 
-nn 1 ./wg-dynamic-server --leasetime 10 wg0
+## Start server in the background with 30s lease time
+exec 4< <(nn 1 ./wg-dynamic-server --leasetime 30 wg0)
+server_pid=$!
+pretty "" "server_pid: $server_pid"
+
+## Get a lease
+send_cmd() {
+    local n=$1; shift
+    local REQ="$1"; shift
+
+    eval $(
+	printf $REQ | nn $n ncat -v -p 970 fe80::%wg0 970 |
+	    while read -r line; do
+		key="${line%%=*}"
+		value="${line#*=}"
+		case "$key" in
+		    ipv4) echo IPV4[$n]="$value"; continue ;;
+		    ipv6) echo IPV6[$n]="$value"; continue ;;
+		    leasestart) echo LEASESTART[$n]="$value"; continue ;;
+		    leasetime) echo LEASETIME[$n]="$value"; continue ;;
+		    errno) echo ERRNO[$n]="$value"; continue ;;
+		esac
+	    done
+	)
+}
+check_alowedips() {
+    local pubkey="$1"; shift
+    local ip="$1"; shift
+
+    [[ -z "$ip" ]] && return 0
+
+    nn 1 wg show wg0 allowed-ips |
+	while read -r _pubkey _ips; do
+	    [[ "$_pubkey" = "$pubkey" ]] || continue
+	    for _ip in $_ips; do
+		[[ "$_ip" = "$ip" ]] && return 0
+	    done
+	done && return 0
+
+    pretty "" "Missing $ip in allowedips"
+    return 1
+}
+declare -a IPV4
+declare -a IPV6
+declare -a LEASESTART
+declare -a LEASETIME
+declare -a ERRNO
+
+send_cmd 2 "request_ip=1\n\n"
+check_alowedips "$client_public" "${IPV4[2]}"
+check_alowedips "$client_public" "${IPV6[2]}"
+
+## Restart server with 10s leasetime
+nn 1 kill $server_pid
+sleep 1
+exec 4< <(nn 1 ./wg-dynamic-server --leasetime 3 wg0) || { pretty "" $?; false; }
+server_pid=$!
+pretty "" "server_pid 2: $server_pid"
+
+## Verify that the lease has been restored
+check_alowedips "$client_public" "${IPV4[2]}"
+check_alowedips "$client_public" "${IPV6[2]}"
+
+## Wait for the lease to expire
+pp sleep 4
+
+## Restart server
+nn 1 kill $server_pid
+sleep 1
+exec 4< <(nn 1 ./wg-dynamic-server wg0)
+
+## Verify that the lease has not reappeared
+notlladdr='192.168.*/32|2001:.*/128'
+nn 1 wg show wg0 allowed-ips |
+    while read -r _pubkey _ips; do
+	[[ "$_pubkey" = "$client_public" ]] || continue
+	for _ip in $_ips; do
+	    [[ "$_ip" =~ $notlladdr ]] && { pretty "" "FAIL: $_ip"; false; }
+	done
+    done && true
+
+pretty "" "SUCCESS\n"

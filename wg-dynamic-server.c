@@ -9,7 +9,6 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
 #include <time.h>
 
 #include <arpa/inet.h>
@@ -30,10 +29,11 @@
 #include "netlink.h"
 
 static const char *progname;
-static const char *wg_interface;
+static const char *wg_interface = NULL;
 static struct in6_addr well_known;
 
 static wg_device *device = NULL;
+static uint32_t leasetime = WG_DYNAMIC_DEFAULT_LEASETIME;
 
 static int sockfd = -1;
 static int epollfd = -1;
@@ -46,6 +46,7 @@ struct wg_dynamic_connection {
 	struct wg_dynamic_request req;
 	int fd;
 	wg_key pubkey;
+	struct in6_addr lladdr;
 	unsigned char *outbuf;
 	size_t buflen;
 };
@@ -54,7 +55,7 @@ static struct wg_dynamic_connection connections[MAX_CONNECTIONS] = { 0 };
 
 static void usage()
 {
-	die("usage: %s <wg-interface>\n", progname);
+	die("usage: %s [--leasetime <leasetime>] <wg-interface>\n", progname);
 }
 
 static bool valid_peer_found(wg_device *device)
@@ -128,7 +129,8 @@ static wg_key *addr_to_pubkey(struct sockaddr_storage *addr)
 	return NULL;
 }
 
-static int accept_connection(wg_key *dest)
+static int accept_connection(wg_key *dest_pubkey,
+			     struct in6_addr *dest_lladdr)
 {
 	int fd;
 	wg_key *pubkey;
@@ -172,7 +174,10 @@ static int accept_connection(wg_key *dest)
 			return -ENOENT;
 		}
 	}
-	memcpy(dest, pubkey, sizeof *dest);
+	memcpy(dest_pubkey, pubkey, sizeof *dest_pubkey);
+
+	memcpy(dest_lladdr, &((struct sockaddr_in6 *)&addr)->sin6_addr,
+	       sizeof *dest_lladdr);
 
 	wg_key_b64_string key;
 	char out[INET6_ADDRSTRLEN];
@@ -216,7 +221,6 @@ static bool send_message(struct wg_dynamic_connection *con,
 		con->outbuf = malloc(con->buflen);
 		if (!con->outbuf)
 			fatal("malloc()");
-
 		memcpy(con->outbuf, buf + offset, con->buflen);
 	} else {
 		con->buflen = len - offset;
@@ -240,40 +244,6 @@ void close_connection(struct wg_dynamic_connection *con)
 	con->buflen = 0;
 }
 
-static void add_allowed_ips(wg_key pubkey, struct in_addr *ipv4,
-			    struct in6_addr *ipv6)
-{
-	wg_allowedip allowed_v4, allowed_v6;
-	wg_peer peer = { 0 };
-	wg_device dev = { .first_peer = &peer };
-
-	strcpy(dev.name, wg_interface);
-	memcpy(peer.public_key, pubkey, sizeof peer.public_key);
-	wg_allowedip **cur = &peer.first_allowedip;
-
-	if (ipv4) {
-		allowed_v4 = (wg_allowedip){
-			.family = AF_INET,
-			.cidr = 32,
-			.ip4 = *ipv4,
-		};
-		*cur = &allowed_v4;
-		cur = &allowed_v4.next_allowedip;
-	}
-
-	if (ipv6) {
-		allowed_v6 = (wg_allowedip){
-			.family = AF_INET6,
-			.cidr = 128,
-			.ip6 = *ipv6,
-		};
-		*cur = &allowed_v6;
-	}
-
-	if (wg_set_device(&dev))
-		fatal("wg_set_device()");
-}
-
 static bool send_response(struct wg_dynamic_connection *con)
 {
 	char buf[MAX_RESPONSE_SIZE];
@@ -282,19 +252,19 @@ static bool send_response(struct wg_dynamic_connection *con)
 	switch (con->req.cmd) {
 	case WGKEY_REQUEST_IP:;
 		struct wg_dynamic_request_ip *rip = con->req.result;
+		struct in6_addr *lladdr = &con->lladdr;
 		struct in_addr *ip4 = rip->has_ipv4 ? &rip->ipv4 : NULL;
 		struct in6_addr *ip6 = rip->has_ipv6 ? &rip->ipv6 : NULL;
 		struct wg_dynamic_lease *lease;
 		struct wg_dynamic_request_ip ans = { 0 };
 
-		lease = new_lease(con->pubkey, WG_DYNAMIC_LEASETIME, ip4, ip6);
+		lease = set_lease(wg_interface, con->pubkey, leasetime, lladdr, ip4, ip6);
 		if (lease) {
 			memcpy(&ans.ipv4, &lease->ipv4, sizeof ans.ipv4);
 			memcpy(&ans.ipv6, &lease->ipv6, sizeof ans.ipv6);
 			ans.has_ipv4 = ans.has_ipv6 = true;
 			ans.start = lease->start_real;
 			ans.leasetime = lease->leasetime;
-			add_allowed_ips(con->pubkey, &ans.ipv4, &ans.ipv6);
 		} else {
 			ans.wg_errno = E_IP_UNAVAIL;
 		}
@@ -402,6 +372,33 @@ static void cleanup()
 	}
 }
 
+static void init_leaess_from_peers()
+{
+	wg_peer *peer;
+
+	wg_for_each_peer (device, peer) {
+		wg_allowedip *allowedip;
+		struct in6_addr *lladdr = NULL;
+		struct in_addr *ipv4 = NULL;
+		struct in6_addr *ipv6 = NULL;
+		wg_for_each_allowedip (peer, allowedip) {
+			if (allowedip->family == AF_INET6 &&
+			    IN6_IS_ADDR_LINKLOCAL(&allowedip->ip6))
+				lladdr = &allowedip->ip6;
+			else if (allowedip->family == AF_INET && !ipv4)
+				ipv4 = &allowedip->ip4;
+			else if (allowedip->family == AF_INET6 && !ipv6)
+				ipv6 = &allowedip->ip6;
+		}
+
+		if (!ipv4 && !ipv6)
+			continue;
+
+		set_lease(wg_interface, peer->public_key, leasetime, lladdr,
+			  ipv4, ipv6);
+	}
+}
+
 static void setup()
 {
 	struct wg_combined_ip ip;
@@ -442,7 +439,8 @@ static void setup()
 		    wg_interface);
 
 	setup_sockets();
-	leases_init("leases_file", nlsock);
+	leases_init(NULL, nlsock);
+	init_leaess_from_peers();
 }
 
 static int get_avail_request()
@@ -462,7 +460,7 @@ static void accept_incoming()
 	struct epoll_event ev;
 
 	while ((n = get_avail_request()) >= 0) {
-		fd = accept_connection(&connections[n].pubkey);
+		fd = accept_connection(&connections[n].pubkey, &connections[n].lladdr);
 		if (fd < 0) {
 			if (fd == -ENOENT) {
 				debug("Failed to match IP to pubkey\n");
@@ -528,7 +526,7 @@ static void poll_loop()
 		fatal("epoll_ctl()");
 
 	while (1) {
-		time_t next = leases_refresh() * 1000;
+		time_t next = leases_refresh(wg_interface) * 1000;
 		int nfds = epoll_wait(epollfd, events, MAX_CONNECTIONS, next);
 		if (nfds == -1) {
 			if (errno == EINTR)
@@ -544,11 +542,29 @@ static void poll_loop()
 
 int main(int argc, char *argv[])
 {
+	char *endptr = NULL;
+
 	progname = argv[0];
-	if (argc != 2)
+	++argv;
+	--argc;
+
+	while (argc > 0) {
+		if (!strcmp(argv[0], "--leasetime") && argc >= 2) {
+			leasetime = (uint32_t) strtoul(argv[1], &endptr, 10);
+			if (*endptr)
+				usage();
+			argv += 2;
+			argc -= 2;
+		} else {
+			wg_interface = argv[0];
+			argv += 1;
+			argc -= 1;
+			break;
+		}
+	}
+	if (!wg_interface || argc > 0)
 		usage();
 
-	wg_interface = argv[1];
 	setup();
 
 	poll_loop();
