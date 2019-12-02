@@ -26,6 +26,8 @@
 
 #define TIME_T_MAX (((time_t)1 << (sizeof(time_t) * CHAR_BIT - 2)) - 1) * 2 + 1
 
+static const char *devname = NULL;
+static int ifindex = 0;
 static struct ip_pool pool;
 static time_t gexpires = TIME_T_MAX;
 static bool synchronized;
@@ -52,12 +54,16 @@ static time_t get_monotonic_time()
 	return monotime.tv_sec;
 }
 
-void leases_init(char *fname, struct mnl_socket *nlsock, uint32_t ifindex)
+void leases_init(const char *device_name, int interface_index, char *fname,
+		 struct mnl_socket *nlsock)
 {
 	struct nlmsghdr *nlh;
 	struct rtmsg *rtm;
 	char buf[MNL_NLMSG_HDRLEN + MNL_ALIGN(sizeof *rtm)];
 	unsigned int seq;
+
+	devname = device_name;
+	ifindex = interface_index;
 
 	synchronized = false;
 	leases_ht = kh_init(leaseht);
@@ -73,7 +79,7 @@ void leases_init(char *fname, struct mnl_socket *nlsock, uint32_t ifindex)
 	if (mnl_socket_sendto(nlsock, nlh, nlh->nlmsg_len) < 0)
 		fatal("mnl_socket_sendto()");
 
-	leases_update_pools(nlsock, ifindex);
+	leases_update_pools(nlsock);
 	synchronized = true;
 
 	UNUSED(fname); /* TODO: open file and initialize from it */
@@ -120,8 +126,7 @@ static char *updates_to_str(const struct allowedips_update *u)
 	return buf;
 }
 
-static void update_allowed_ips_bulk(const char *devname,
-				    const struct allowedips_update *updates,
+static void update_allowed_ips_bulk(const struct allowedips_update *updates,
 				    int nupdates)
 {
 	wg_peer peers[WG_DYNAMIC_LEASE_CHUNKSIZE] = { 0 };
@@ -180,7 +185,7 @@ static void update_allowed_ips_bulk(const char *devname,
 /* Updates allowedips for peer_pubkey, adding what's in lease
  * (including lladdr), removing all others.
  */
-static void update_allowed_ips(const char *devname, wg_key peer_pubkey,
+static void update_allowed_ips(wg_key peer_pubkey,
 			       struct wg_dynamic_lease *lease)
 {
 	struct allowedips_update update;
@@ -190,11 +195,10 @@ static void update_allowed_ips(const char *devname, wg_key peer_pubkey,
 	update.ipv4 = &lease->ipv4;
 	update.ipv6 = &lease->ipv6;
 
-	update_allowed_ips_bulk(devname, &update, 1);
+	update_allowed_ips_bulk(&update, 1);
 }
 
-struct wg_dynamic_lease *set_lease(const char *devname, wg_key pubkey,
-				   uint32_t leasetime,
+struct wg_dynamic_lease *set_lease(wg_key pubkey, uint32_t leasetime,
 				   const struct in6_addr *lladdr,
 				   const struct in_addr *ipv4,
 				   const struct in6_addr *ipv6)
@@ -281,7 +285,7 @@ struct wg_dynamic_lease *set_lease(const char *devname, wg_key pubkey,
 		}
 	}
 
-	update_allowed_ips(devname, pubkey, lease);
+	update_allowed_ips(pubkey, lease);
 
 	if (clock_gettime(CLOCK_REALTIME, &tp))
 		fatal("clock_gettime(CLOCK_REALTIME)");
@@ -319,7 +323,7 @@ struct wg_dynamic_lease *get_leases(wg_key pubkey)
 		return kh_val(leases_ht, k);
 }
 
-int leases_refresh(const char *devname)
+int leases_refresh()
 {
 	time_t cur_time = get_monotonic_time();
 	struct allowedips_update updates[WG_DYNAMIC_LEASE_CHUNKSIZE] = { 0 };
@@ -353,7 +357,7 @@ int leases_refresh(const char *devname)
 
 			++i;
 			if (i == WG_DYNAMIC_LEASE_CHUNKSIZE) {
-				update_allowed_ips_bulk(devname, updates, i);
+				update_allowed_ips_bulk(updates, i);
 				i = 0;
 				memset(updates, 0, sizeof updates);
 			}
@@ -368,7 +372,7 @@ int leases_refresh(const char *devname)
 	}
 
 	if (i)
-		update_allowed_ips_bulk(devname, updates, i);
+		update_allowed_ips_bulk(updates, i);
 
 	return MIN(INT_MAX / 1000, gexpires - cur_time);
 }
@@ -480,7 +484,7 @@ static int process_nlpacket_cb(const struct nlmsghdr *nlh, void *data)
 	return MNL_CB_OK;
 }
 
-void leases_update_pools(struct mnl_socket *nlsock, uint32_t ifindex)
+void leases_update_pools(struct mnl_socket *nlsock)
 {
 	int ret;
 	char buf[MNL_SOCKET_BUFFER_SIZE];

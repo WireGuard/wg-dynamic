@@ -99,7 +99,7 @@ static bool validate_link_local_ip(uint32_t ifindex)
 	return cb_data.valid_ip_found;
 }
 
-static bool valid_peer_found(wg_device *device)
+static bool valid_peer_found()
 {
 	wg_peer *peer;
 	wg_key_b64_string key;
@@ -292,7 +292,7 @@ static int response_request_ip(struct wg_dynamic_attr *cur, wg_key pubkey,
 		cur = cur->next;
 	}
 
-	*lease = set_lease(wg_interface, pubkey, leasetime, lladdr, ipv4, ipv6);
+	*lease = set_lease(pubkey, leasetime, lladdr, ipv4, ipv6);
 	if (!*lease)
 		return E_IP_UNAVAIL;
 
@@ -423,8 +423,7 @@ static void init_leases_from_peers()
 		if (!ipv4 && !ipv6)
 			continue;
 
-		set_lease(wg_interface, peer->public_key, leasetime, lladdr,
-			  ipv4, ipv6);
+		set_lease(peer->public_key, leasetime, lladdr, ipv4, ipv6);
 	}
 }
 
@@ -453,7 +452,7 @@ static void setup()
 		    wg_interface);
 
 	setup_sockets();
-	leases_init(NULL, nlsock, device->ifindex);
+	leases_init(wg_interface, device->ifindex, NULL, nlsock);
 	init_leases_from_peers();
 }
 
@@ -509,7 +508,7 @@ static void handle_event(void *ptr, uint32_t events)
 	}
 
 	if (ptr == nlsock) {
-		leases_update_pools(nlsock, device->ifindex);
+		leases_update_pools(nlsock);
 		return;
 	}
 
@@ -543,7 +542,7 @@ static void poll_loop()
 		fatal("epoll_ctl()");
 
 	while (1) {
-		time_t next = leases_refresh(wg_interface) * 1000;
+		time_t next = leases_refresh() * 1000;
 		int nfds = epoll_wait(epollfd, events, MAX_CONNECTIONS, next);
 		if (nfds == -1) {
 			if (errno == EINTR)
