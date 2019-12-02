@@ -384,12 +384,6 @@ static int data_ipv4_attr_cb(const struct nlattr *attr, void *data)
 
 	switch (type) {
 	case RTA_DST:
-	case RTA_GATEWAY:
-		if (mnl_attr_validate(attr, MNL_TYPE_U32) < 0) {
-			log_err("mnl_attr_validate: %s\n", strerror(errno));
-			return MNL_CB_ERROR;
-		}
-		break;
 	case RTA_OIF:
 		if (mnl_attr_validate(attr, MNL_TYPE_U32) < 0) {
 			log_err("mnl_attr_validate: %s\n", strerror(errno));
@@ -410,10 +404,9 @@ static int data_ipv6_attr_cb(const struct nlattr *attr, void *data)
 
 	switch (type) {
 	case RTA_DST:
-	case RTA_GATEWAY:
 		if (mnl_attr_validate2(attr, MNL_TYPE_BINARY,
 				       sizeof(struct in6_addr)) < 0) {
-			log_err("mnl_attr_validate: %s\n", strerror(errno));
+			log_err("mnl_attr_validate2: %s\n", strerror(errno));
 			return MNL_CB_ERROR;
 		}
 		break;
