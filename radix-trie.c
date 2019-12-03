@@ -495,6 +495,93 @@ static int ipp_addpool(struct ipns *ns, struct radix_pool **pool,
 	return 0;
 }
 
+static int orphan_nodes(struct radix_node *node, uint64_t *val)
+{
+	uint64_t v1 = 0, v2 = 0;
+
+	if (!node)
+		return 0;
+
+	if (node->flags & RNODE_IS_POOLNODE) {
+		BUG_ON(!(node->flags & RNODE_IS_SHADOWED));
+		node->flags &= ~RNODE_IS_SHADOWED;
+		return 0;
+	}
+
+	if (node->flags & RNODE_IS_LEAF) {
+		BUG_ON(node->bit[0] || node->bit[1]);
+		*val = 1;
+		free(node);
+		return 1;
+	}
+
+	if (orphan_nodes(node->bit[0], &v1))
+		node->bit[0] = NULL;
+
+	if (orphan_nodes(node->bit[1], &v2))
+		node->bit[1] = NULL;
+
+	node->left += v1;
+	node->right += v2;
+	*val = v1 + v2;
+
+	if (node->bit[0] || node->bit[1])
+		return 0; /* still need this node */
+
+	free(node);
+	return 1;
+}
+
+static int ipp_removepool(struct ipns *ns, uint8_t bits, const uint8_t *key,
+			  uint8_t cidr)
+{
+	struct radix_pool **current, *next;
+	struct radix_node *node;
+
+	for (current = &ns->ip4_pools; *current; current = &(*current)->next) {
+		struct radix_node *node = (*current)->node;
+		if (node->cidr == cidr && common_bits(node, key, bits) >= cidr)
+			break;
+	}
+
+	if (!*current)
+		return -1;
+
+	node = (*current)->node;
+
+	if (node->flags & RNODE_IS_SHADOWED) {
+		node->flags &= ~RNODE_IS_SHADOWED;
+	} else {
+		struct radix_node *n = ns->ip4_root;
+		uint64_t v1 = 0, v2 = 0;
+
+		if (orphan_nodes(node->bit[0], &v1))
+			node->bit[0] = NULL;
+
+		if (orphan_nodes(node->bit[1], &v2))
+			node->bit[1] = NULL;
+
+		node->left += v1;
+		node->right += v2;
+
+		while (n && n->cidr < cidr && prefix_matches(n, key, bits)) {
+			if (n->bit[0] == CHOOSE_NODE(n, key))
+				n->left += v1 + v2;
+			else
+				n->right += v1 + v2;
+
+			n = CHOOSE_NODE(n, key);
+		}
+	}
+
+	node->flags &= ~RNODE_IS_POOLNODE;
+	next = (*current)->next;
+	free(*current);
+	*current = next;
+
+	return 0;
+}
+
 #ifdef DEBUG
 #include <stdio.h>
 void node_to_str(struct radix_node *node, char *buf, uint8_t bits)
@@ -652,16 +739,26 @@ int ipp_addpool_v6(struct ipns *ns, const struct in6_addr *ip, uint8_t cidr)
 	return ipp_addpool(ns, &ns->ip6_pools, &ns->ip6_root, 128, key, cidr);
 }
 
-/* TODO: implement */
-int ipp_removepool_v4(struct ipns *ns, const struct in_addr *ip)
+int ipp_removepool_v4(struct ipns *ns, const struct in_addr *ip, uint8_t cidr)
 {
-	return 0;
+	uint8_t key[4] __aligned(__alignof(uint32_t));
+
+	if (cidr <= 0 || cidr >= 32)
+		return -1;
+
+	swap_endian(key, (const uint8_t *)ip, 32);
+	return ipp_removepool(ns, 32, key, cidr);
 }
 
-/* TODO: implement */
-int ipp_removepool_v6(struct ipns *ns, const struct in6_addr *ip)
+int ipp_removepool_v6(struct ipns *ns, const struct in6_addr *ip, uint8_t cidr)
 {
-	return 0;
+	uint8_t key[16] __aligned(__alignof(uint64_t));
+
+	if (cidr < 64 || cidr >= 128)
+		return -1;
+
+	swap_endian(key, (const uint8_t *)ip, 128);
+	return ipp_removepool(ns, 128, key, cidr);
 }
 
 void ipp_addnth_v4(struct ipns *ns, struct in_addr *dest, uint32_t index)

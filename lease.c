@@ -466,10 +466,12 @@ static int process_nlpacket_cb(const struct nlmsghdr *nlh, void *data)
 		}
 	} else if (nlh->nlmsg_type == RTM_DELROUTE) {
 		if (rm->rtm_family == AF_INET) {
-			if (ipp_removepool_v4(&ipns, addr) && synchronized)
+			if (ipp_removepool_v4(&ipns, addr, rm->rtm_dst_len) &&
+			    synchronized)
 				die("ipp_removepool_v4()\n");
 		} else if (rm->rtm_family == AF_INET6) {
-			if (ipp_removepool_v6(&ipns, addr) && synchronized)
+			if (ipp_removepool_v6(&ipns, addr, rm->rtm_dst_len) &&
+			    synchronized)
 				die("ipp_removepool_v6()\n");
 		}
 	}

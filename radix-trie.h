@@ -35,8 +35,8 @@ void ipp_addnth_v6(struct ipns *ns, struct in6_addr *dest, uint32_t index_low,
 int ipp_addpool_v4(struct ipns *ns, const struct in_addr *ip, uint8_t cidr);
 int ipp_addpool_v6(struct ipns *ns, const struct in6_addr *ip, uint8_t cidr);
 
-int ipp_removepool_v4(struct ipns *ns, const struct in_addr *ip);
-int ipp_removepool_v6(struct ipns *ns, const struct in6_addr *ip);
+int ipp_removepool_v4(struct ipns *ns, const struct in_addr *ip, uint8_t cidr);
+int ipp_removepool_v6(struct ipns *ns, const struct in6_addr *ip, uint8_t cidr);
 
 #ifdef DEBUG
 void node_to_str(struct radix_node *node, char *buf, uint8_t bits);
