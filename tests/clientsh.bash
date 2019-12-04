@@ -223,11 +223,11 @@ test_case_1() {
     send_cmd 3 "ip_request=\n\n"
     [[ ${ERRNO[3]} = 2 ]] || fail "errno: ${ERRNO[3]}"
 
-    ## Check disabled 2019-09-27. Enable again when ipp_add_v4() and
-    ## ipp_add_v6() have checks.
-    #pretty 3 "Request an address we won't get => errno=2"
-    #req 3 "1.1.1.0/32" "-"
-    #[[ ${ERRNO[3]} = 2 ]] || fail "errno: ${ERRNO[3]}"
+    pretty 3 "Request addresses not in the pool"
+    req 3 "1.1.1.1/32" "fd00::1/128"
+    [[ ${ERRNO[3]} = 0 ]] || fail "errno: ${ERRNO[3]}"
+    [[ ${IPV4[3]} = 0.0.0.0/32 ]] || fail " ${IPV4[3]} != 0.0.0.0/32"
+    [[ ${IPV6[3]} = ::/128 ]] || fail "${IPV6[3]} != ::/128"
 
     pretty "" "SUCCESS\n"
 }
