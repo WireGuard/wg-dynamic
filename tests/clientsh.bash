@@ -221,7 +221,7 @@ test_case_1() {
 
     pretty 3 "Badly formed request => errno=1 -- EXPECTED FAILURE: errno=2"
     send_cmd 3 "ip_request=\n\n"
-    [[ ${ERRNO[3]} = 2 ]] || fail "errno: ${ERRNO[3]}"
+    [[ ${ERRNO[3]} = 2 ]] || fail "errno: ${ERRNO[3]} != 2"
 
     pretty 3 "Request addresses not in the pool"
     req 3 "1.1.1.1/32" "fd00::1/128"
@@ -245,8 +245,8 @@ test_case_2() {
     pretty 4 "Extend v4, extend v6"
     req_check 4 $C4_FIRST_V4 $C4_FIRST_V6
     [[ ${ERRNO[4]} = 0 ]] || fail "errno: ${ERRNO[4]}"
-    [[ ${IPV4[4]} = $C4_FIRST_V4 ]] || fail "ipv4: ${IPV4[4]}"
-    [[ ${IPV6[4]} = $C4_FIRST_V6 ]] || fail "ipv6: ${IPV6[4]}"
+    [[ ${IPV4[4]} = $C4_FIRST_V4 ]] || fail "${IPV4[4]} != $C4_FIRST_V4"
+    [[ ${IPV6[4]} = $C4_FIRST_V6 ]] || fail "${IPV6[4]} != $C4_FIRST_V6"
 
     pretty 4 "Extend v4, drop v6"
     req_check 4 $C4_FIRST_V4 "-"
@@ -282,7 +282,7 @@ test_case_3() {
 
     pretty 6 "Drop v4, extend v6"
     req_check 6 "-" $C6_FIRST_V6
-    [[ ${ERRNO[6]} = 0 ]] || fail "errno: ${ERRNO[6]} != 0"
+    [[ ${ERRNO[6]} = 0 ]] || fail "errno: ${ERRNO[6]}"
     [[ ${IPV4[6]} = 0.0.0.0/32 ]] || fail "ipv4: ${IPV4[6]} != 0.0.0.0/32"
     [[ ${IPV6[6]} = $C6_FIRST_V6 ]] || fail "ipv6: ${IPV6[6]} != $C6_FIRST_V6"
 
