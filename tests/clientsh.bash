@@ -108,8 +108,8 @@ send_cmd() {
     # It would have been nice to use /dev/tcp/fe80::%w0/970 instead of
     # nc, but we need to use a specific source port.
     eval $(
-	printf $REQ | nn -q $n ncat -p 970 fe80::%wg0 970 |
-	    while read -r line; do
+	printf $REQ | nn -q $n ncat -p 970 fe80::%wg0 970 2>/dev/null |
+	    while read -r line && [[ -n $line ]] ; do
 		key="${line%%=*}"
 		value="${line#*=}"
 		case "$key" in
