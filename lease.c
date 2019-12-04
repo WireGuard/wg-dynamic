@@ -99,9 +99,7 @@ void leases_free()
 
 struct allowedips_update {
 	wg_key peer_pubkey;
-	struct in6_addr *lladdr;
-	struct in_addr *ipv4;
-	struct in6_addr *ipv6;
+	struct wg_dynamic_lease *lease;
 };
 
 static char *updates_to_str(const struct allowedips_update *u)
@@ -115,13 +113,10 @@ static char *updates_to_str(const struct allowedips_update *u)
 		return "(null)";
 
 	wg_key_to_base64(pubkey_asc, u->peer_pubkey);
-	if (u->ipv4)
-		inet_ntop(AF_INET, u->ipv4, v4, sizeof v4);
-	if (u->ipv6)
-		inet_ntop(AF_INET6, u->ipv6, v6, sizeof v6);
-	if (u->lladdr)
-		inet_ntop(AF_INET6, u->lladdr, ll, sizeof ll);
-	snprintf(buf, sizeof buf, "(%p) [%s] %s [%s]", u, ll, v4, v6);
+	inet_ntop(AF_INET, &u->lease->ipv4, v4, sizeof v4);
+	inet_ntop(AF_INET6, &u->lease->ipv6, v6, sizeof v6);
+	inet_ntop(AF_INET6, &u->lease->lladdr, ll, sizeof ll);
+	snprintf(buf, sizeof buf, "(%p) [%s] %s [%s]", u->lease, ll, v4, v6);
 
 	return buf;
 }
@@ -144,31 +139,29 @@ static void update_allowed_ips_bulk(const struct allowedips_update *updates,
 		       sizeof(wg_key));
 		wg_allowedip **aipp = &peers[i].first_allowedip;
 
-		if (updates[i].lladdr &&
-		    !IN6_IS_ADDR_UNSPECIFIED(updates[i].lladdr)) {
+		if (!IN6_IS_ADDR_UNSPECIFIED(&updates[i].lease->lladdr)) {
 			allowedips[i * 3 + 0] = (wg_allowedip){
 				.family = AF_INET6,
 				.cidr = 128,
-				.ip6 = *updates[i].lladdr,
+				.ip6 = updates[i].lease->lladdr,
 			};
 			*aipp = &allowedips[i * 3 + 0];
 			aipp = &allowedips[i * 3 + 0].next_allowedip;
 		}
-		if (updates[i].ipv4 && updates[i].ipv4->s_addr) {
+		if (updates[i].lease->ipv4.s_addr) {
 			allowedips[i * 3 + 1] = (wg_allowedip){
 				.family = AF_INET,
 				.cidr = 32,
-				.ip4 = *updates[i].ipv4,
+				.ip4 = updates[i].lease->ipv4,
 			};
 			*aipp = &allowedips[i * 3 + 1];
 			aipp = &allowedips[i * 3 + 1].next_allowedip;
 		}
-		if (updates[i].ipv6 &&
-		    !IN6_IS_ADDR_UNSPECIFIED(updates[i].ipv6)) {
+		if (!IN6_IS_ADDR_UNSPECIFIED(&updates[i].lease->ipv6)) {
 			allowedips[i * 3 + 2] = (wg_allowedip){
 				.family = AF_INET6,
 				.cidr = 128,
-				.ip6 = *updates[i].ipv6,
+				.ip6 = updates[i].lease->ipv6,
 			};
 			*aipp = &allowedips[i * 3 + 2];
 		}
@@ -191,9 +184,7 @@ static void update_allowed_ips(wg_key peer_pubkey,
 	struct allowedips_update update;
 
 	memcpy(update.peer_pubkey, peer_pubkey, sizeof(wg_key));
-	update.lladdr = &lease->lladdr;
-	update.ipv4 = &lease->ipv4;
-	update.ipv6 = &lease->ipv6;
+	update.lease = lease;
 
 	update_allowed_ips_bulk(&update, 1);
 }
@@ -349,7 +340,7 @@ int leases_refresh()
 
 			memcpy(updates[i].peer_pubkey, kh_key(leases_ht, k),
 			       sizeof(wg_key));
-			updates[i].lladdr = &lease->lladdr;
+			updates[i].lease = lease;
 
 			wg_key_b64_string pubkey_asc;
 			wg_key_to_base64(pubkey_asc, updates[i].peer_pubkey);
@@ -358,11 +349,11 @@ int leases_refresh()
 			++i;
 			if (i == WG_DYNAMIC_LEASE_CHUNKSIZE) {
 				update_allowed_ips_bulk(updates, i);
-				i = 0;
+				while (i)
+					free(updates[--i].lease);
 				memset(updates, 0, sizeof updates);
 			}
 
-			free(lease);
 			free((char *)kh_key(leases_ht, k));
 			kh_del(leaseht, leases_ht, k);
 		} else {
@@ -371,8 +362,11 @@ int leases_refresh()
 		}
 	}
 
-	if (i)
+	if (i) {
 		update_allowed_ips_bulk(updates, i);
+		while (i)
+			free(updates[--i].lease);
+	}
 
 	return MIN(INT_MAX / 1000, gexpires - cur_time);
 }
