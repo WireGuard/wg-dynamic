@@ -81,7 +81,7 @@ check_alowedips() {
     local pubkey="$1"; shift
     local ip="$1"; shift
 
-    [[ -z "$ip" ]] && return 0
+    [[ $ip = 0.0.0.0/32 || $ip = ::/128 ]] && return 0
 
     nn -q 1 wg show wg0 allowed-ips |
 	while read -r _pubkey _ips; do
@@ -251,21 +251,21 @@ test_case_2() {
     pretty 4 "Extend v4, drop v6"
     req_check 4 $C4_FIRST_V4 "-"
     [[ ${ERRNO[4]} = 0 ]] || fail "errno: ${ERRNO[4]}"
-    [[ ${IPV4[4]} = $C4_FIRST_V4  ]] || fail "ipv4: ${IPV4[4]}"
-    [[ -z "${IPV6[4]}" ]] || fail "ipv6: ${IPV6[4]}"
+    [[ ${IPV4[4]} = $C4_FIRST_V4  ]] || fail "${IPV4[4]} != $C4_FIRST_V4"
+    [[ ${IPV6[4]} = ::/128 ]] || fail "${IPV6[4]} != ::/128"
 
     pretty 5 "Requesting the v4 of client 4 and no v6 => errno=0 and no addrs"
     req 5 $C4_FIRST_V4 "-"
     [[ ${ERRNO[5]} = 0 ]] || fail "errno: ${ERRNO[5]}"
-    [[ -z "${IPV4[5]}" ]] || fail "ipv4 not empty: ${IPV4[5]}"
-    [[ -z "${IPV6[5]}" ]] || fail "ipv6 not empty: ${IPV6[5]}"
+    [[ ${IPV4[5]} = 0.0.0.0/32 ]] || fail " ${IPV4[5]} != 0.0.0.0/32"
+    [[ ${IPV6[5]} = ::/128 ]] || fail "${IPV6[5]} != ::/128"
 
     pretty 5 "Wait for lease to expire and try again"
     pp sleep ${LEASETIME[4]}
     req_check 5 $C4_FIRST_V4 "-"
     [[ ${ERRNO[5]} = 0 ]] || fail "errno: ${ERRNO[5]}"
-    [[ ${IPV4[5]} = $C4_FIRST_V4  ]] || fail "ipv4: ${IPV4[5]} != $C4_FIRST_V4"
-    [[ -z "${IPV6[5]}" ]] || fail "ipv6 not empty: ${IPV6[5]}"
+    [[ ${IPV4[5]} = $C4_FIRST_V4  ]] || fail "${IPV4[5]} != $C4_FIRST_V4"
+    [[ ${IPV6[5]} = ::/128 ]] || fail "${IPV6[5]} != ::/128"
 
     pretty "" "SUCCESS\n"
 }
@@ -283,7 +283,7 @@ test_case_3() {
     pretty 6 "Drop v4, extend v6"
     req_check 6 "-" $C6_FIRST_V6
     [[ ${ERRNO[6]} = 0 ]] || fail "errno: ${ERRNO[6]} != 0"
-    [[ -z ${IPV4[6]} ]] || fail "ipv4: ${IPV4[6]} != 0.0.0.0/32"
+    [[ ${IPV4[6]} = 0.0.0.0/32 ]] || fail "ipv4: ${IPV4[6]} != 0.0.0.0/32"
     [[ ${IPV6[6]} = $C6_FIRST_V6 ]] || fail "ipv6: ${IPV6[6]} != $C6_FIRST_V6"
 
     pretty "" "SUCCESS\n"
