@@ -27,7 +27,7 @@
 #endif
 #endif
 
-static inline bool __attribute__((__warn_unused_result__))
+bool __attribute__((__warn_unused_result__))
 get_random_bytes(uint8_t *out, size_t len)
 {
 	ssize_t ret = 0;

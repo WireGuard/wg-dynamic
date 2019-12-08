@@ -129,6 +129,9 @@ int main() {
 #include <string.h>
 #include <limits.h>
 
+#include "random.h"
+#include "siphash.h"
+
 /* compiler specific configuration */
 
 #if UINT_MAX == 0xffffffffu
@@ -197,6 +200,7 @@ static const double __ac_HASH_UPPER = 0.77;
 		khint32_t *flags; \
 		khkey_t *keys; \
 		khval_t *vals; \
+		siphash_key_t siphash_key; \
 	} kh_##name##_t;
 
 #define __KHASH_PROTOTYPES(name, khkey_t, khval_t)	 					\
@@ -210,7 +214,10 @@ static const double __ac_HASH_UPPER = 0.77;
 
 #define __KHASH_IMPL(name, SCOPE, khkey_t, khval_t, kh_is_map, __hash_func, __hash_equal) \
 	SCOPE kh_##name##_t *kh_init_##name(void) {							\
-		return (kh_##name##_t*)kcalloc(1, sizeof(kh_##name##_t));		\
+		kh_##name##_t *s = kcalloc(1, sizeof(kh_##name##_t));					\
+		if (!get_random_bytes((uint8_t *)&s->siphash_key, 16))				\
+			return NULL;									\
+		return s;										\
 	}																	\
 	SCOPE void kh_destroy_##name(kh_##name##_t *h)						\
 	{																	\
@@ -629,20 +636,13 @@ typedef const unsigned char *khwgkey_t;
 
 #define kh_wgkey_hash_equal(a, b) (memcmp(a, b, 32) == 0)
 
-static kh_inline khint_t __fnv_1a_32_hash(const unsigned char *wgkey)
-{
-	khint_t hash = 0x811c9dc5UL;
-	for (int i = 0; i < 32; ++i) {
-		hash ^= wgkey[i];
-		hash *= 16777619UL;
-	}
-	return hash;
-}
+#define __SIPHASH(key) ((khint32_t) siphash(key, 32, &h->siphash_key))
+#define __SIPHASH_u64(key) ((khint32_t) siphash_1u64(key, &h->siphash_key))
 
-#define KHASH_SET_INIT_WGKEY(name)										\
-	KHASH_INIT(name, khwgkey_t, char, 0, __fnv_1a_32_hash, kh_wgkey_hash_equal)
+#define KHASH_MAP_INIT_SECURE_INT64(name, khval_t)				\
+	KHASH_INIT(name, khint64_t, khval_t, 1, __SIPHASH_u64, kh_int64_hash_equal)
 
-#define KHASH_MAP_INIT_WGKEY(name, khval_t)								\
-	KHASH_INIT(name, khwgkey_t, khval_t, 1, __fnv_1a_32_hash, kh_wgkey_hash_equal)
+#define KHASH_MAP_INIT_SECURE_WGKEY(name, khval_t)				\
+	KHASH_INIT(name, khwgkey_t, khval_t, 1, __SIPHASH, kh_wgkey_hash_equal)
 
 #endif /* __AC_KHASH_H */

@@ -40,7 +40,7 @@ static int sockfd = -1;
 static int epollfd = -1;
 static struct mnl_socket *nlsock = NULL;
 
-KHASH_MAP_INIT_INT64(allowedht, wg_key *)
+KHASH_MAP_INIT_SECURE_INT64(allowedht, wg_key *)
 khash_t(allowedht) * allowedips_ht;
 
 struct wg_dynamic_connection {
@@ -427,6 +427,8 @@ static void setup()
 		fatal("inet_pton()");
 
 	allowedips_ht = kh_init(allowedht);
+	if (!allowedips_ht)
+		fatal("kh_init()");
 
 	for (int i = 0; i < MAX_CONNECTIONS; ++i)
 		connections[i].fd = -1;

@@ -32,7 +32,7 @@ static struct ipns ipns;
 static time_t gexpires = TIME_T_MAX;
 static bool synchronized;
 
-KHASH_MAP_INIT_WGKEY(leaseht, struct wg_dynamic_lease *)
+KHASH_MAP_INIT_SECURE_WGKEY(leaseht, struct wg_dynamic_lease *)
 khash_t(leaseht) *leases_ht = NULL;
 
 static time_t get_monotonic_time()
@@ -67,6 +67,9 @@ void leases_init(const char *device_name, int interface_index, char *fname,
 
 	synchronized = false;
 	leases_ht = kh_init(leaseht);
+	if (!leases_ht)
+		fatal("kh_init()");
+
 	ipp_init(&ipns);
 
 	nlh = mnl_nlmsg_put_header(buf);
