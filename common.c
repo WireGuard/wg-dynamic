@@ -77,24 +77,27 @@ static void (*const deserialize_fptr[])(enum wg_dynamic_key key,
 
 static bool parse_ip_cidr(struct wg_combined_ip *ip, char *value)
 {
-	uintmax_t res;
-	char *endptr;
 	char *sep;
 
 	sep = strchr(value, '/');
-	if (!sep)
-		return false;
+	if (sep) {
+		char *endptr;
+		uintmax_t res = strtoumax(sep + 1, &endptr, 10);
+		if (res > UINT8_MAX || *endptr != '\0' || sep + 1 == endptr)
+			return false;
 
-	*sep = '\0';
+		if ((ip->family == AF_INET && res > 32) ||
+		    (ip->family == AF_INET6 && res > 128))
+			return false;
+
+		*sep = '\0';
+		ip->cidr = (uint8_t)res;
+	} else {
+		ip->cidr = ip->family == AF_INET ? 32 : 128;
+	}
+
 	if (inet_pton(ip->family, value, ip) != 1)
 		return false;
-
-	res = strtoumax(sep + 1, &endptr, 10);
-	if (res > UINT8_MAX || *endptr != '\0' || sep + 1 == endptr)
-		return false;
-
-	// TODO: validate cidr range depending on ip->family
-	ip->cidr = (uint8_t)res;
 
 	return true;
 }
