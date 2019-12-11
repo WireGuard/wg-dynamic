@@ -333,15 +333,16 @@ size_t serialize_request_ip(bool send, char *buf, size_t len,
 		print_to_buf(buf, len, &off, "ip=%s/128\n", addrbuf);
 	}
 
-	if (rip->start && rip->leasetime)
+	if (rip->has_ipv4 || rip->has_ipv6)
 		print_to_buf(buf, len, &off, "leasestart=%u\nleasetime=%u\n",
 			     rip->start, rip->leasetime);
 
-	if (rip->errmsg)
-		print_to_buf(buf, len, &off, "errmsg=%s\n", rip->errmsg);
-
 	if (!send)
 		print_to_buf(buf, len, &off, "errno=%u\n", rip->wg_errno);
+
+	if (rip->wg_errno)
+		print_to_buf(buf, len, &off, "errmsg=%s\n",
+			     WG_DYNAMIC_ERR[rip->wg_errno]);
 
 	print_to_buf(buf, len, &off, "\n");
 

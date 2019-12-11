@@ -47,7 +47,7 @@ static const char *const WG_DYNAMIC_KEY[] = { ITEMS };
 	E(E_NO_ERROR, "Success") /* must be the first entry */                 \
 	E(E_INVALID_REQ, "Invalid request")                                    \
 	E(E_UNSUPP_PROTO, "Unsupported protocol")                              \
-	E(E_IP_UNAVAIL, "Chosen IP unavailable")
+	E(E_IP_UNAVAIL, "Chosen IP(s) unavailable")
 
 #define E(x, y) x,
 enum wg_dynamic_err { ITEMS };

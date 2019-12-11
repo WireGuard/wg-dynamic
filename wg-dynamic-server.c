@@ -262,15 +262,22 @@ static bool send_response(struct wg_dynamic_connection *con)
 
 		lease = set_lease(con->pubkey, leasetime, &con->lladdr, ip4,
 				  ip6);
-		if (lease) {
+
+		if (lease->ipv4.s_addr) {
+			ans.has_ipv4 = true;
 			memcpy(&ans.ipv4, &lease->ipv4, sizeof ans.ipv4);
-			memcpy(&ans.ipv6, &lease->ipv6, sizeof ans.ipv6);
-			ans.has_ipv4 = ans.has_ipv6 = true;
-			ans.start = lease->start_real;
-			ans.leasetime = lease->leasetime;
-		} else {
-			ans.wg_errno = E_IP_UNAVAIL;
 		}
+		if (!IN6_IS_ADDR_UNSPECIFIED(&lease->ipv6)) {
+			ans.has_ipv6 = true;
+			memcpy(&ans.ipv6, &lease->ipv6, sizeof ans.ipv6);
+		}
+
+		if ((!ans.has_ipv4 && rip->has_ipv4) ||
+		    (!ans.has_ipv6 && rip->has_ipv6))
+			ans.wg_errno = E_IP_UNAVAIL;
+
+		ans.start = lease->start_real;
+		ans.leasetime = lease->leasetime;
 
 		msglen = serialize_request_ip(false, buf, sizeof buf, &ans);
 		break;

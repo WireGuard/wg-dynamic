@@ -144,6 +144,7 @@ static int request_ip(struct wg_dynamic_request_ip *rip)
 		if (close(sockfd))
 			debug("Failed to close socket: %s\n", strerror(errno));
 
+		log_err("Server communication error.\n");
 		return -1;
 	}
 
@@ -151,27 +152,51 @@ static int request_ip(struct wg_dynamic_request_ip *rip)
 		log_err("Warning: discarding %zu extra bytes sent by the server\n",
 			remaining);
 
-	if (rip->wg_errno)
+	if (rip->wg_errno && !rip->has_ipv4 && !rip->has_ipv6) {
+		if (rip->errmsg) {
+			log_err("Server refused request: %s\n", rip->errmsg);
+			return -1;
+		} else if (rip->wg_errno <= ARRAY_SIZE(WG_DYNAMIC_ERR) - 1) {
+			log_err("Server refused request: %s\n",
+				WG_DYNAMIC_ERR[rip->wg_errno]);
+		} else {
+			log_err("Server refused request: unknown error code %u\n",
+				rip->wg_errno);
+		}
+
+		free(rip->errmsg); /* TODO: this could be done cleaner */
 		return -1;
+	}
+	free(rip->errmsg);
 
 	if (!ipv4_assigned || memcmp(&ipv4, &rip->ipv4, sizeof ipv4)) {
 		if (ipv4_assigned && ipm_deladdr_v4(device->ifindex, &ipv4))
 			fatal("ipm_deladdr_v4()");
 
-		memcpy(&ipv4, &rip->ipv4, sizeof ipv4);
-		if (ipm_newaddr_v4(device->ifindex, &ipv4))
-			fatal("ipm_newaddr_v4()");
-		ipv4_assigned = true;
+		if (rip->has_ipv4) {
+			memcpy(&ipv4, &rip->ipv4, sizeof ipv4);
+			if (ipm_newaddr_v4(device->ifindex, &ipv4))
+				fatal("ipm_newaddr_v4()");
+			ipv4_assigned = true;
+		} else {
+			memset(&ipv4, 0, sizeof ipv4);
+			ipv4_assigned = false;
+		}
 	}
 
 	if (!ipv6_assigned || memcmp(&ipv6, &rip->ipv6, sizeof ipv6)) {
 		if (ipv6_assigned && ipm_deladdr_v6(device->ifindex, &ipv6))
 			fatal("ipm_deladdr_v6()");
 
-		memcpy(&ipv6, &rip->ipv6, sizeof ipv6);
-		if (ipm_newaddr_v6(device->ifindex, &ipv6))
-			fatal("ipm_newaddr_v6()");
-		ipv6_assigned = true;
+		if (rip->has_ipv6) {
+			memcpy(&ipv6, &rip->ipv6, sizeof ipv6);
+			if (ipm_newaddr_v6(device->ifindex, &ipv6))
+				fatal("ipm_newaddr_v6()");
+			ipv6_assigned = true;
+		} else {
+			memset(&ipv6, 0, sizeof ipv6);
+			ipv6_assigned = false;
+		}
 	}
 
 	if (close(sockfd))
@@ -245,7 +270,7 @@ static void loop()
 
 	if (request_ip(&rip)) {
 		/* TODO: implement some sort of exponential backoff */
-		debug("Server communication error, trying again in 30s\n");
+		log_err("Trying again in 30s.\n");
 		xnanosleep(30);
 		return;
 	}
