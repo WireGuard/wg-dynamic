@@ -39,15 +39,16 @@ static void request_ip(enum wg_dynamic_key key, union kvalues kv, void **dest)
 			fatal("calloc()");
 
 		break;
-	case WGKEY_IPV4:
-		memcpy(&r->ipv4, &ip->ip4, sizeof r->ipv4);
-		r->cidrv4 = ip->cidr;
-		r->has_ipv4 = true;
-		break;
-	case WGKEY_IPV6:
-		memcpy(&r->ipv6, &ip->ip6, sizeof r->ipv6);
-		r->cidrv6 = ip->cidr;
-		r->has_ipv6 = true;
+	case WGKEY_IP:
+		if (ip->family == AF_INET) {
+			memcpy(&r->ipv4, &ip->ip4, sizeof r->ipv4);
+			r->cidrv4 = ip->cidr;
+			r->has_ipv4 = true;
+		} else {
+			memcpy(&r->ipv6, &ip->ip6, sizeof r->ipv6);
+			r->cidrv6 = ip->cidr;
+			r->has_ipv6 = true;
+		}
 		break;
 	case WGKEY_LEASESTART:
 		r->start = kv.u32;
@@ -80,12 +81,6 @@ static bool parse_ip_cidr(struct wg_combined_ip *ip, char *value)
 	char *endptr;
 	char *sep;
 
-	if (value[0] == '\0') {
-		memset(ip, 0, ip->family == AF_INET ? 4 : 16);
-		ip->cidr = 0;
-		return true;
-	}
-
 	sep = strchr(value, '/');
 	if (!sep)
 		return false;
@@ -111,10 +106,9 @@ static bool parse_value(enum wg_dynamic_key key, char *str, union kvalues *kv)
 	struct wg_combined_ip *ip;
 
 	switch (key) {
-	case WGKEY_IPV4:
-	case WGKEY_IPV6:
+	case WGKEY_IP:
 		ip = &kv->ip;
-		ip->family = (key == WGKEY_IPV4) ? AF_INET : AF_INET6;
+		ip->family = strchr(str, ':') ? AF_INET6 : AF_INET;
 		if (!parse_ip_cidr(ip, str))
 			return false;
 
@@ -329,14 +323,14 @@ size_t serialize_request_ip(bool send, char *buf, size_t len,
 		if (!inet_ntop(AF_INET, &rip->ipv4, addrbuf, sizeof addrbuf))
 			fatal("inet_ntop()");
 
-		print_to_buf(buf, len, &off, "ipv4=%s/32\n", addrbuf);
+		print_to_buf(buf, len, &off, "ip=%s/32\n", addrbuf);
 	}
 
 	if (rip->has_ipv6) {
 		if (!inet_ntop(AF_INET6, &rip->ipv6, addrbuf, sizeof addrbuf))
 			fatal("inet_ntop()");
 
-		print_to_buf(buf, len, &off, "ipv6=%s/128\n", addrbuf);
+		print_to_buf(buf, len, &off, "ip=%s/128\n", addrbuf);
 	}
 
 	if (rip->start && rip->leasetime)

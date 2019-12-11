@@ -194,8 +194,8 @@ struct wg_dynamic_lease *set_lease(wg_key pubkey, uint32_t leasetime,
 				   const struct in_addr *ipv4,
 				   const struct in6_addr *ipv6)
 {
-	bool delete_ipv4 = ipv4 && !ipv4->s_addr;
-	bool delete_ipv6 = ipv6 && IN6_IS_ADDR_UNSPECIFIED(ipv6);
+	bool delete_ipv4 = !ipv4 || (ipv4 && !ipv4->s_addr);
+	bool delete_ipv6 = !ipv6 || (ipv6 && IN6_IS_ADDR_UNSPECIFIED(ipv6));
 	struct wg_dynamic_lease *lease;
 	struct timespec tp;
 	khiter_t k;
@@ -207,23 +207,19 @@ struct wg_dynamic_lease *set_lease(wg_key pubkey, uint32_t leasetime,
 		lease->lladdr = *lladdr;
 	}
 
-	if (lease->ipv4.s_addr &&
-	    (delete_ipv4 ||
-	     (ipv4 && memcmp(&lease->ipv4, ipv4, sizeof(*ipv4))))) {
+	if (delete_ipv4 && lease->ipv4.s_addr) {
 		if (ipp_del_v4(&ipns, &lease->ipv4, 32))
 			die("ipp_del_v4()\n");
 		memset(&lease->ipv4, 0, sizeof(lease->ipv4));
 	}
 
-	if (!IN6_IS_ADDR_UNSPECIFIED(&lease->ipv6) &&
-	    (delete_ipv6 ||
-	     (ipv6 && memcmp(&lease->ipv6, ipv6, sizeof(*ipv6))))) {
+	if (delete_ipv6 && !IN6_IS_ADDR_UNSPECIFIED(&lease->ipv6)) {
 		if (ipp_del_v6(&ipns, &lease->ipv6, 128))
 			die("ipp_del_v6()\n");
 		memset(&lease->ipv6, 0, sizeof(lease->ipv6));
 	}
 
-	if (!ipv4) { /* Wants random IPv4 address? */
+	if (ipv4 && !ipv4->s_addr) {
 		if (!ipns.total_ipv4) {
 			debug("IPv4 pool empty\n");
 			memset(&lease->ipv4, 0, sizeof(lease->ipv4));
@@ -233,7 +229,7 @@ struct wg_dynamic_lease *set_lease(wg_key pubkey, uint32_t leasetime,
 			      ipns.total_ipv4);
 			ipp_addnth_v4(&ipns, &lease->ipv4, index);
 		}
-	} else if (ipv4->s_addr) {
+	} else if (ipv4) {
 		if (!memcmp(&lease->ipv4, ipv4, sizeof(*ipv4))) {
 			debug("extending(v4)\n");
 		} else {
@@ -245,7 +241,7 @@ struct wg_dynamic_lease *set_lease(wg_key pubkey, uint32_t leasetime,
 		}
 	}
 
-	if (!ipv6) { /* Wants random IPv6 address? */
+	if (ipv6 && IN6_IS_ADDR_UNSPECIFIED(ipv6)) {
 		if (!ipns.totalh_ipv6 && !ipns.totall_ipv6) {
 			debug("IPv6 pool empty\n");
 			memset(&lease->ipv6, 0, sizeof(lease->ipv6));
@@ -264,7 +260,7 @@ struct wg_dynamic_lease *set_lease(wg_key pubkey, uint32_t leasetime,
 			      index_l, ipns.totalh_ipv6, ipns.totall_ipv6);
 			ipp_addnth_v6(&ipns, &lease->ipv6, index_l, index_h);
 		}
-	} else if (!IN6_IS_ADDR_UNSPECIFIED(ipv6)) {
+	} else if (ipv6) {
 		if (!memcmp(&lease->ipv6, ipv6, sizeof(*ipv6))) {
 			debug("extending(v6)\n");
 		} else {

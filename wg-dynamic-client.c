@@ -42,9 +42,9 @@ static void usage()
 static void cleanup()
 {
 	if (ipv4_assigned && ipm_deladdr_v4(device->ifindex, &ipv4))
-		debug("Failed to cleanup ipv4 address");
+		debug("Failed to cleanup ipv4 address\n");
 	if (ipv6_assigned && ipm_deladdr_v6(device->ifindex, &ipv6))
-		debug("Failed to cleanup ipv6 address");
+		debug("Failed to cleanup ipv6 address\n");
 
 	if (sockfd >= 0)
 		close(sockfd);
@@ -111,14 +111,12 @@ static int request_ip(struct wg_dynamic_request_ip *rip)
 	if (connect(sockfd, (struct sockaddr *)&dstaddr, sizeof(dstaddr)))
 		fatal("connect()");
 
-	if (ipv4_assigned) {
+	rip->has_ipv4 = rip->has_ipv6 = true;
+	if (ipv4_assigned)
 		memcpy(&rip->ipv4, &ipv4, sizeof rip->ipv4);
-		rip->has_ipv4 = true;
-	}
-	if (ipv6_assigned) {
+
+	if (ipv6_assigned)
 		memcpy(&rip->ipv6, &ipv6, sizeof rip->ipv6);
-		rip->has_ipv6 = true;
-	}
 
 	msglen = serialize_request_ip(true, (char *)buf, RECV_BUFSIZE, rip);
 	do {

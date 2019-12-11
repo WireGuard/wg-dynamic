@@ -29,8 +29,7 @@ static const uint16_t WG_DYNAMIC_PORT = 970; /* ASCII sum of "wireguard" */
 	E(WGKEY_REQUEST_IP, "request_ip")                                      \
 	E(WGKEY_ENDCMD, "")                                                    \
 	/* CMD END */                                                          \
-	E(WGKEY_IPV4, "ipv4")                                                  \
-	E(WGKEY_IPV6, "ipv6")                                                  \
+	E(WGKEY_IP, "ip")                                                      \
 	E(WGKEY_LEASESTART, "leasestart")                                      \
 	E(WGKEY_LEASETIME, "leasetime")                                        \
 	E(WGKEY_ERRNO, "errno")                                                \
