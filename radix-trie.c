@@ -223,6 +223,11 @@ static struct radix_node *add(struct radix_node **trie, uint8_t bits,
 	}
 
 	if (!*trie) {
+		if (type & RNODE_IS_LEAF) {
+			errno = ENOENT;
+			return NULL;
+		}
+
 		*trie = new_node(key, cidr, bits);
 		(*trie)->flags = type;
 		return *trie;
