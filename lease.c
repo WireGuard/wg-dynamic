@@ -331,11 +331,15 @@ int leases_refresh()
 		BUG_ON(!lease);
 		time_t expires = lease->start_mono + lease->leasetime;
 		if (cur_time >= expires) {
-			if (lease->ipv4.s_addr)
+			if (lease->ipv4.s_addr) {
 				ipp_del_v4(&ipns, &lease->ipv4, 32);
+				memset(&lease->ipv4, 0, sizeof(lease->ipv4));
+			}
 
-			if (!IN6_IS_ADDR_UNSPECIFIED(&lease->ipv6))
+			if (!IN6_IS_ADDR_UNSPECIFIED(&lease->ipv6)) {
 				ipp_del_v6(&ipns, &lease->ipv6, 128);
+				memset(&lease->ipv6, 0, sizeof(lease->ipv6));
+			}
 
 			memcpy(updates[i].peer_pubkey, kh_key(leases_ht, k),
 			       sizeof(wg_key));
