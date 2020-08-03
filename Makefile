@@ -56,7 +56,7 @@ clean:
 	$(RM) wg-dynamic-client wg-dynamic-server *.o *.d
 endif
 
-install: wg
+install: all
 	@install -v -d "$(DESTDIR)$(BINDIR)" && install -v -m 0755 wg-dynamic-server "$(DESTDIR)$(BINDIR)/wg-dynamic-server"
 	@install -v -d "$(DESTDIR)$(BINDIR)" && install -v -m 0755 wg-dynamic-server "$(DESTDIR)$(BINDIR)/wg-dynamic-client"
 	@install -v -d "$(DESTDIR)$(MANDIR)/man8" && install -v -m 0644 man/wg-dynamic-server.8 "$(DESTDIR)$(MANDIR)/man8/wg-dynamic-server.8"
